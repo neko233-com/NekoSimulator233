@@ -1,0 +1,23 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="NekoSimulator233" Manufacturer="neko233" Version="$(var.Version)" UpgradeCode="92e48fc1-263e-4f72-87c4-d23e3b10fa23" Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of NekoSimulator233 is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="NekoSimulator233">
+        <Component Id="Application" Guid="*">
+          <File Id="ApplicationExe" Source="$(var.Exe)" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuApp" Name="NekoSimulator233">
+        <Component Id="Shortcut" Guid="*">
+          <Shortcut Id="StartMenuShortcut" Name="NekoSimulator233" Target="[INSTALLFOLDER]NekoSimulator233.exe" WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveProgramMenuApp" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="Shortcut" /></Feature>
+  </Package>
+</Wix>

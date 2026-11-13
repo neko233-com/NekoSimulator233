@@ -1,0 +1,18 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+	"github.com/neko233-com/NekoSimulator233/internal/mumu"
+)
+
+func TestInstanceView(t *testing.T) {
+	a := &app{message: "已连接", instances: []mumu.Instance{{Index: "0", Name: "测试实例", AndroidVersion: "15.0", AndroidStarted: true}}}
+	tester := ui.NewTester(a.view, 760, 500)
+	for _, want := range []string{"NekoSimulator233", "已连接", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
+		if !tester.HasText(want) {
+			t.Errorf("missing %q in %q", want, tester.Texts())
+		}
+	}
+}
