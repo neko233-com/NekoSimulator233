@@ -85,7 +85,7 @@ func (a *app) startIndependent() {
 			instance, err = manager.StartWithProgress(ctx, func(percent int) {
 				a.window.Update(func() {
 					if a.sdkJob == job && a.sdkCancel != nil && ctx.Err() == nil {
-						a.message = fmt.Sprintf("正在准备 Google Play 镜像：%d%%", percent)
+						a.message = fmt.Sprintf("正在准备 Android 运行组件：%d%%", percent)
 					}
 				})
 			})

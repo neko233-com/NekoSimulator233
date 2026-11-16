@@ -373,7 +373,7 @@ func (s *Service) start(ctx context.Context, req *mcp.CallToolRequest, _ Empty) 
 	if req != nil && req.Params != nil && req.Params.GetProgressToken() != nil {
 		token := req.Params.GetProgressToken()
 		notify = func(percent int) {
-			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "准备 Google Play 系统镜像"})
+			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "准备 Android 运行组件"})
 		}
 	}
 	i, err := m.StartWithProgress(ctx, notify)

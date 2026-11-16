@@ -31,8 +31,27 @@ func TestMain(m *testing.M) {
 		case "license":
 			fmt.Fprintln(os.Stderr, "License for package not accepted")
 			os.Exit(1)
+		case "license-exit0":
+			fmt.Fprintln(os.Stderr, "License for package not accepted")
+			os.Exit(0)
 		case "wait":
 			time.Sleep(30 * time.Second)
+			os.Exit(0)
+		}
+		if root := os.Getenv("NEKO_TEST_FAKE_SDKMANAGER_RUNTIME_ROOT"); root != "" {
+			var target string
+			for _, arg := range os.Args[1:] {
+				switch arg {
+				case "platform-tools":
+					target = filepath.Join(root, "platform-tools", "adb.exe")
+				case "emulator":
+					target = filepath.Join(root, "emulator", "emulator.exe")
+				}
+			}
+			if target == "" || os.MkdirAll(filepath.Dir(target), 0700) != nil || os.WriteFile(target, []byte("fake runtime"), 0600) != nil {
+				os.Exit(6)
+			}
+			fmt.Fprintln(os.Stdout, "Installing 100%")
 			os.Exit(0)
 		}
 		image := os.Getenv("NEKO_TEST_FAKE_SDKMANAGER_IMAGE")

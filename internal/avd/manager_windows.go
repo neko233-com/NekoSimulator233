@@ -60,7 +60,16 @@ func DiscoverManager() (Manager, error) {
 			return Manager{SDK: sdk, Home: filepath.Join(local, "NekoSimulator233-data", "avd"), Name: defaultName}, nil
 		}
 	}
-	return Manager{}, errors.New("未找到 Android SDK 的 emulator 和 platform-tools，请设置 ANDROID_HOME")
+	// A command-line-tools-only SDK can install its missing runtime packages.
+	for _, sdk := range candidates {
+		if _, _, err := sdkManagerTools(sdk); err == nil {
+			if local == "" {
+				return Manager{}, errors.New("未找到 LOCALAPPDATA")
+			}
+			return Manager{SDK: sdk, Home: filepath.Join(local, "NekoSimulator233-data", "avd"), Name: defaultName}, nil
+		}
+	}
+	return Manager{}, errors.New("未找到可用的 Android SDK 或 Command-line Tools，请设置 ANDROID_HOME")
 }
 
 func exists(path string) bool { info, err := os.Stat(path); return err == nil && !info.IsDir() }
@@ -497,10 +506,23 @@ func (m Manager) Start(ctx context.Context) (Instance, error) {
 // StartWithProgress prepares the official Play image on first start and then
 // limits the boot phase separately. Existing instances are never changed.
 func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Instance, error) {
-	if err := m.prepareStart(ctx, notify, func(ctx context.Context, api int, notify func(int)) error {
+	imageProgress := func(n int) {
+		if notify != nil {
+			notify(n * 4 / 5)
+		}
+	}
+	runtimeProgress := func(n int) {
+		if notify != nil {
+			notify(80 + n/5)
+		}
+	}
+	if err := m.prepareStart(ctx, imageProgress, func(ctx context.Context, api int, notify func(int)) error {
 		_, err := m.InstallPlayImage(ctx, api, notify)
 		return err
 	}); err != nil {
+		return Instance{}, err
+	}
+	if err := m.InstallSDKRuntime(ctx, runtimeProgress); err != nil {
 		return Instance{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)

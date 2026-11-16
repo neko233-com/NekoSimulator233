@@ -33,6 +33,13 @@ func TestIndependentInstanceLaunchTargets(t *testing.T) {
 	if err := os.Link(self, emulator); err != nil {
 		t.Skipf("cannot link isolated emulator helper: %v", err)
 	}
+	adb := filepath.Join(m.SDK, "platform-tools", "adb.exe")
+	if err := os.MkdirAll(filepath.Dir(adb), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(adb, []byte("unused fake adb"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"Alpha", "Beta"} {
 		record := filepath.Join(t.TempDir(), name+"-args.json")
 		t.Setenv("NEKO_TEST_FAKE_EMULATOR_RECORD", record)
