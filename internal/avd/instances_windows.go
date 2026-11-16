@@ -30,6 +30,7 @@ func (m Manager) WithName(name string) (Manager, error) {
 type InstanceSummary struct {
 	Name   string `json:"name"`
 	State  string `json:"state" jsonschema:"not_created, stopped, running or unknown"`
+	API    int    `json:"api,omitempty" jsonschema:"Android system image API level, when recognized"`
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -85,12 +86,17 @@ func (m Manager) ListInstances(ctx context.Context) ([]InstanceSummary, error) {
 		default:
 			if _, err := ownedAVD(candidate); err != nil || !exists(filepath.Join(dir, "config.ini")) {
 				item.State, item.Reason = "unknown", "实例路径或配置无效，已保留文件"
-			} else if _, err := candidate.discover(); err == nil {
-				item.State = "running"
-			} else if errors.Is(err, errInstanceNotRunning) {
-				item.State = "stopped"
 			} else {
-				item.State, item.Reason = "unknown", err.Error()
+				if config, e := parseINI(filepath.Join(dir, "config.ini")); e == nil {
+					item.API, _ = systemImageAPI(config)
+				}
+				if _, err := candidate.discover(); err == nil {
+					item.State = "running"
+				} else if errors.Is(err, errInstanceNotRunning) {
+					item.State = "stopped"
+				} else {
+					item.State, item.Reason = "unknown", err.Error()
+				}
 			}
 		}
 		results = append(results, item)
@@ -102,6 +108,15 @@ func (m Manager) ListInstances(ctx context.Context) ([]InstanceSummary, error) {
 // CreateInstance creates only fresh metadata and never overwrites or repairs
 // preexisting paths, including incomplete directories and links.
 func (m Manager) CreateInstance(ctx context.Context, name string) error {
+	return m.CreateInstanceAPI(ctx, name, 0)
+}
+
+// CreateInstanceAPI selects an installed image for a fresh instance. API 0
+// selects the default; it never changes the system image of an existing AVD.
+func (m Manager) CreateInstanceAPI(ctx context.Context, name string, api int) error {
+	if api != 0 && api != 30 && api != 34 && api != 35 {
+		return errors.New("不支持的 Android 系统版本")
+	}
 	candidate, err := m.WithName(name)
 	if err != nil {
 		return err
@@ -125,5 +140,5 @@ func (m Manager) CreateInstance(ctx context.Context, name string) error {
 	} else if !errors.Is(err, errInstanceNotRunning) {
 		return err
 	}
-	return candidate.Ensure()
+	return candidate.ensureWithAPI(api)
 }

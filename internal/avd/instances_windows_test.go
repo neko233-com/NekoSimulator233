@@ -99,6 +99,68 @@ func TestIndependentInstanceCreationAndIsolation(t *testing.T) {
 	}
 }
 
+func TestCreateAndroid11InstanceAndBackup(t *testing.T) {
+	m := backupFixture(t)
+	ctx := context.Background()
+	image := filepath.Join(m.SDK, "system-images", "android-30", "google_apis", "x86_64", "system.img")
+	if err := os.MkdirAll(filepath.Dir(image), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(image, []byte("synthetic Android 11 image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(image), "build.prop"), []byte("ro.build.version.incremental=12345678\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CreateInstanceAPI(ctx, "Legacy32", 30); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := m.WithName("Legacy32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.Home, "Legacy32.avd")
+	config, err := parseINI(filepath.Join(dir, "config.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err := systemImageAPI(config)
+	if err != nil || api != 30 {
+		t.Fatalf("wrong image API: %d %v", api, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "version_num.cache"), []byte("12345678\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "userdata-qemu.img"), []byte("synthetic guest data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "legacy.nekobak")
+	if err := legacy.ExportBackup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	restored := Manager{SDK: m.SDK, Home: filepath.Join(t.TempDir(), "restored"), Name: "LegacyCopy"}
+	if err := restored.ImportBackup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	config, err = parseINI(filepath.Join(restored.Home, "LegacyCopy.avd", "config.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err = systemImageAPI(config)
+	if err != nil || api != 30 {
+		t.Fatalf("restored image API changed: %d %v", api, err)
+	}
+	if err := legacy.CreateInstanceAPI(ctx, "Legacy32", 34); err == nil {
+		t.Fatal("accepted overwrite of existing instance with different API")
+	}
+	if err := m.CreateInstanceAPI(ctx, "Missing", 35); err == nil || !strings.Contains(err.Error(), "system-images;android-35") {
+		t.Fatalf("missing image did not give install instruction: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "Missing.avd")); !os.IsNotExist(err) {
+		t.Fatal("missing image left instance data behind")
+	}
+}
+
 func TestIndependentInstanceRejectsUnsafeAndIncompleteNames(t *testing.T) {
 	m := backupFixture(t)
 	for _, name := range []string{"", ".", "..", "../escape", `C:\escape`, "CON", "AUX", "name.", "bad name", "a\nb"} {

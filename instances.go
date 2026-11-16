@@ -9,18 +9,38 @@ import (
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 )
 
+const (
+	systemAuto      = "自动（Android 14/15）"
+	systemAndroid11 = "Android 11（32 位兼容）"
+)
+
+func newSystemAPI(choice string) (int, error) {
+	switch choice {
+	case "", systemAuto:
+		return 0, nil
+	case systemAndroid11:
+		return 30, nil
+	default:
+		return 0, fmt.Errorf("不支持的 Android 系统选择")
+	}
+}
+
 func (a *app) selectedStatus() string {
 	for _, item := range a.available {
 		if strings.EqualFold(item.Name, a.selectedName()) {
+			prefix := ""
+			if item.API != 0 {
+				prefix = fmt.Sprintf("Android API %d · ", item.API)
+			}
 			switch item.State {
 			case "not_created":
-				return "上次检查：实例尚未创建"
+				return prefix + "上次检查：实例尚未创建"
 			case "stopped":
-				return "上次检查：实例已停止"
+				return prefix + "上次检查：实例已停止"
 			case "running":
-				return "上次检查：实例进程运行中"
+				return prefix + "上次检查：实例进程运行中"
 			case "unknown":
-				return "当前实例：状态未知 · " + item.Reason
+				return prefix + "当前实例：状态未知 · " + item.Reason
 			}
 		}
 	}
@@ -66,6 +86,11 @@ func (a *app) createIndependent() {
 		return
 	}
 	name := strings.TrimSpace(a.newInstance)
+	api, err := newSystemAPI(a.newSystem)
+	if err != nil {
+		a.message = err.Error()
+		return
+	}
 	a.busy = true
 	a.message = "正在创建独立实例…"
 	go func() {
@@ -74,7 +99,7 @@ func (a *app) createIndependent() {
 		created := false
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err = manager.CreateInstance(ctx, name)
+			err = manager.CreateInstanceAPI(ctx, name, api)
 			if err == nil {
 				created = true
 				items, err = manager.ListInstances(ctx)

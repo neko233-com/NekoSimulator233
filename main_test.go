@@ -12,7 +12,7 @@ import (
 func TestInstanceView(t *testing.T) {
 	a := &app{message: "已连接", instances: []mumu.Instance{{Index: "0", Name: "测试实例", AndroidVersion: "15.0", AndroidStarted: true}}}
 	tester := ui.NewTester(a.view, 760, 500)
-	for _, want := range []string{"NekoSimulator233", "已连接", "资源设置…", "安装 APK…", "更新 APK…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
+	for _, want := range []string{"NekoSimulator233", "已连接", "资源设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
@@ -49,6 +49,32 @@ func TestIndependentInstanceSelectionInView(t *testing.T) {
 	}
 	if a.selectedName() != "Alpha" {
 		t.Fatalf("selection = %q", a.selectedName())
+	}
+}
+
+func TestNewInstanceSystemChoice(t *testing.T) {
+	if api, err := newSystemAPI(systemAndroid11); err != nil || api != 30 {
+		t.Fatalf("Android 11 choice = %d, %v", api, err)
+	}
+	if api, err := newSystemAPI(systemAuto); err != nil || api != 0 {
+		t.Fatalf("default choice = %d, %v", api, err)
+	}
+	if _, err := newSystemAPI("unknown"); err == nil {
+		t.Fatal("unsupported system choice accepted")
+	}
+}
+
+func TestNewInstanceSystemChoiceInView(t *testing.T) {
+	a := &app{}
+	tester := ui.NewTester(a.view, 760, 650)
+	if err := tester.Click("新实例系统"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click(systemAndroid11); err != nil {
+		t.Fatal(err)
+	}
+	if a.newSystem != systemAndroid11 {
+		t.Fatalf("system selection = %q", a.newSystem)
 	}
 }
 

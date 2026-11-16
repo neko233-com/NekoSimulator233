@@ -31,6 +31,7 @@ type app struct {
 	selected         string
 	available        []avd.InstanceSummary
 	newInstance      string
+	newSystem        string
 	backupCancel     context.CancelFunc
 	closeAfterBackup bool
 }
@@ -267,12 +268,18 @@ func (a *app) view(c *ui.Context) {
 		if a.selected == "" {
 			a.selected = avd.DefaultName
 		}
+		if a.newSystem == "" {
+			a.newSystem = systemAuto
+		}
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Select(c.Key("independent-select"), &a.selected, a.instanceChoices()).Label("独立实例").Disabled(a.busy)
 			ui.TextInput(c.Key("new-instance"), &a.newInstance).Placeholder("新建或恢复的实例名称").Width(220).Disabled(a.busy)
 			if ui.Button(c.Key("create-instance"), "新建实例").Disabled(a.busy).Clicked() {
 				a.createIndependent()
 			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Select(c.Key("new-system"), &a.newSystem, []string{systemAuto, systemAndroid11}).Label("新实例系统").Disabled(a.busy)
 		})
 		if status := a.selectedStatus(); status != "" {
 			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
@@ -291,6 +298,9 @@ func (a *app) view(c *ui.Context) {
 		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c.Key("resource-settings"), "资源设置…").Disabled(a.busy).Clicked() {
 				a.openResources()
+			}
+			if ui.Button(c.Key("device-info"), "系统兼容信息").Disabled(a.busy).Clicked() {
+				a.showDeviceInfo()
 			}
 			if ui.Button(c.Key("install-apk"), "安装 APK…").Disabled(a.busy).Clicked() {
 				a.chooseAPK(false)

@@ -87,8 +87,17 @@ func writeNew(path, contents string) error {
 // Ensure creates only our own AVD metadata. Existing data and configuration
 // are never overwritten or reset.
 func (m Manager) Ensure() error {
+	return m.ensureWithAPI(0)
+}
+
+// ensureWithAPI only chooses an image for a new AVD; existing metadata is
+// always preserved. API 0 keeps the existing Android 15/14 default policy.
+func (m Manager) ensureWithAPI(requestedAPI int) error {
 	if err := m.validate(); err != nil {
 		return err
+	}
+	if requestedAPI != 0 && requestedAPI != 30 && requestedAPI != 34 && requestedAPI != 35 {
+		return errors.New("不支持的 Android 系统版本")
 	}
 	home, err := filepath.Abs(m.Home)
 	if err != nil {
@@ -105,7 +114,11 @@ func (m Manager) Ensure() error {
 		return errors.New("实例配置不完整，已保留现有数据；请检查 AVD 目录")
 	}
 	var imagePath, api string
-	for _, level := range []string{"35", "34"} {
+	levels := []string{"35", "34"}
+	if requestedAPI != 0 {
+		levels = []string{strconv.Itoa(requestedAPI)}
+	}
+	for _, level := range levels {
 		p := filepath.Join("system-images", "android-"+level, "google_apis", "x86_64")
 		if exists(filepath.Join(m.SDK, p, "system.img")) {
 			imagePath, api = p, level
@@ -113,6 +126,9 @@ func (m Manager) Ensure() error {
 		}
 	}
 	if imagePath == "" {
+		if requestedAPI != 0 {
+			return fmt.Errorf("缺少 Android %d google_apis x86_64 系统镜像；请使用 SDK Manager 安装 system-images;android-%d;google_apis;x86_64", requestedAPI, requestedAPI)
+		}
 		return errors.New("缺少 Android 34 或 35 的 google_apis x86_64 系统镜像")
 	}
 	if err := os.MkdirAll(home, 0700); err != nil {
@@ -608,6 +624,9 @@ func apkInstallError(output []byte, err error) error {
 	}
 	if reason == "" {
 		return fmt.Errorf("安装 APK 失败：%w", err)
+	}
+	if strings.Contains(reason, "INSTALL_FAILED_NO_MATCHING_ABIS") {
+		reason += "；APK 的 CPU 架构与实例不匹配。仅含 32 位 ARM 库的应用可尝试新建 Android 11 兼容实例"
 	}
 	const maxReason = 2048
 	if runes := []rune(reason); len(runes) > maxReason {

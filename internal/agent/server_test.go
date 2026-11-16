@@ -69,7 +69,7 @@ func TestLiveMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 24 {
+	if len(list.Tools) != 25 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	call := func(name string, args any) *mcp.CallToolResult {
@@ -84,6 +84,11 @@ func TestLiveMCP(t *testing.T) {
 		return result
 	}
 	call("neko_status", map[string]any{})
+	deviceInfo := call("neko_device_info", map[string]any{})
+	infoJSON, err := json.Marshal(deviceInfo.StructuredContent)
+	if err != nil || !strings.Contains(string(infoJSON), "x86_64") {
+		t.Fatalf("guest ABI information missing: %s %v", infoJSON, err)
+	}
 	shot := call("neko_screenshot", map[string]any{})
 	if len(shot.Content) != 1 {
 		t.Fatal("screenshot returned no image")

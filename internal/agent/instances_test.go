@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +20,13 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(image, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacyImage := filepath.Join(sdk, "system-images", "android-30", "google_apis", "x86_64", "system.img")
+	if err := os.MkdirAll(filepath.Dir(legacyImage), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyImage, []byte("test legacy"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	manager := avd.Manager{SDK: sdk, Home: filepath.Join(root, "avd"), Name: avd.DefaultName}
@@ -45,6 +53,12 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 		return result
 	}
 	call("neko_create_instance", map[string]any{"name": "Alpha"}, false)
+	call("neko_create_instance", map[string]any{"name": "Legacy", "api": 30}, false)
+	config, err := os.ReadFile(filepath.Join(manager.Home, "Legacy.avd", "config.ini"))
+	if err != nil || !strings.Contains(string(config), "system-images\\android-30\\") {
+		t.Fatalf("MCP did not select Android 11: %s %v", config, err)
+	}
+	call("neko_create_instance", map[string]any{"name": "BadAPI", "api": 29}, true)
 	call("neko_create_instance", map[string]any{"name": "alpha"}, true)
 	call("neko_select_instance", map[string]any{"name": "Alpha"}, false)
 	call("neko_set_resources", map[string]any{"cores": 2, "ram_mib": 1536}, false)

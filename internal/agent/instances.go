@@ -19,14 +19,14 @@ func (s *Service) listInstances(ctx context.Context, _ *mcp.CallToolRequest, _ E
 	return nil, InstanceList{Instances: instances, Selected: m.Name}, err
 }
 
-func (s *Service) createInstance(ctx context.Context, _ *mcp.CallToolRequest, request InstanceName) (*mcp.CallToolResult, Result, error) {
+func (s *Service) createInstance(ctx context.Context, _ *mcp.CallToolRequest, request CreateInstance) (*mcp.CallToolResult, Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.manager()
 	if err != nil {
 		return nil, Result{}, err
 	}
-	err = m.CreateInstance(ctx, request.Name)
+	err = m.CreateInstanceAPI(ctx, request.Name, request.API)
 	return nil, Result{OK: err == nil}, err
 }
 

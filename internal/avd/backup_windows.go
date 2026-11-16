@@ -54,12 +54,14 @@ type backupManifest struct {
 func systemImageAPI(values map[string]string) (int, error) {
 	image := strings.ToLower(strings.ReplaceAll(strings.Trim(values["image.sysdir.1"], `\/ `), `\`, "/"))
 	switch image {
+	case "system-images/android-30/google_apis/x86_64":
+		return 30, nil
 	case "system-images/android-34/google_apis/x86_64":
 		return 34, nil
 	case "system-images/android-35/google_apis/x86_64":
 		return 35, nil
 	default:
-		return 0, errors.New("仅支持 Android 34/35 google_apis x86_64 实例")
+		return 0, errors.New("仅支持 Android 30/34/35 google_apis x86_64 实例")
 	}
 }
 
@@ -521,7 +523,7 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 }
 
 func validateBackupSettings(s backupSettings) error {
-	if s.API != 34 && s.API != 35 {
+	if s.API != 30 && s.API != 34 && s.API != 35 {
 		return errors.New("备份的 Android 版本不受支持")
 	}
 	if s.Cores < 1 || s.Cores > 64 || s.RAM < 512 || s.RAM > 131072 || s.Width < 320 || s.Width > 8192 || s.Height < 320 || s.Height > 8192 || s.Density < 72 || s.Density > 1000 {

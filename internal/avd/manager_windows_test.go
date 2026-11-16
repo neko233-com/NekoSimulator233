@@ -32,6 +32,11 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]")
 			os.Exit(1)
 		}
+		if os.Getenv("NEKO_TEST_FAKE_ADB_PROPERTIES") == "1" {
+			props := map[string]string{"ro.build.version.sdk": "30", "ro.product.cpu.abilist": "x86_64,x86,arm64-v8a,armeabi-v7a,armeabi", "ro.dalvik.vm.native.bridge": "libndk_translation.so"}
+			fmt.Println(props[os.Args[len(os.Args)-1]])
+			os.Exit(0)
+		}
 		fmt.Println("Success")
 		os.Exit(0)
 	}
@@ -89,6 +94,10 @@ func TestAPKInstallErrorIncludesPackageManagerReason(t *testing.T) {
 	err := apkInstallError([]byte("Failure [INSTALL_FAILED_ALREADY_EXISTS]"), underlying)
 	if !errors.Is(err, underlying) || !strings.Contains(err.Error(), "INSTALL_FAILED_ALREADY_EXISTS") {
 		t.Fatalf("package manager reason missing: %v", err)
+	}
+	err = apkInstallError([]byte("Failure [INSTALL_FAILED_NO_MATCHING_ABIS]"), underlying)
+	if !strings.Contains(err.Error(), "Android 11") || !strings.Contains(err.Error(), "INSTALL_FAILED_NO_MATCHING_ABIS") {
+		t.Fatalf("ABI mismatch has no actionable guidance: %v", err)
 	}
 	err = apkInstallError([]byte(strings.Repeat("较", 3000)+"签名错误"), underlying)
 	if !strings.Contains(err.Error(), "签名错误") || len([]rune(err.Error())) > 2100 {
