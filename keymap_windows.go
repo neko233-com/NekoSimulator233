@@ -1,32 +1,20 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
-	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/keymap"
 	"golang.org/x/sys/windows"
 )
 
-type mappedPoint struct{ X, Y float64 }
-type joystickConfig struct {
-	Center mappedPoint `json:"center"`
-	Radius float64     `json:"radius"`
-}
-type keymapFile struct {
-	Version  int                    `json:"version"`
-	Keys     map[uint16]mappedPoint `json:"keys"`
-	Joystick *joystickConfig        `json:"joystick,omitempty"`
-}
+type mappedPoint = keymap.Point
+type joystickConfig = keymap.Joystick
+type keymapFile = keymap.File
 type keymapStore struct {
 	path     string
 	revision [32]byte
@@ -35,17 +23,19 @@ type keymapStore struct {
 }
 
 // USB HID keyboard usage IDs for the fixed WASD movement cluster.
-func joystickKey(k uint16) bool { return k == 0x1a || k == 0x04 || k == 0x16 || k == 0x07 }
+func joystickKey(k uint16) bool { return keymap.JoystickKey(k) }
 
 func keymapPath() string {
 	return filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "keymap.json")
 }
 
 func keymapPathForInstance(name string) string {
-	if strings.EqualFold(name, avd.DefaultName) {
-		return keymapPath()
-	}
-	return filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "keymaps", strings.ToLower(name)+".json")
+	return keymap.LegacyPath(filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data"), name, avd.DefaultName)
+}
+
+func resolveKeymapPathForInstance(name string) (string, error) {
+	root := filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data")
+	return keymap.Resolve(root, filepath.Join(root, "avd", name+".avd"), name, avd.DefaultName)
 }
 
 func (s *keymapStore) read() (map[uint16]mappedPoint, error) {
@@ -58,35 +48,9 @@ func (s *keymapStore) read() (map[uint16]mappedPoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > 64<<10 {
-		return nil, errors.New("键位文件过大")
-	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	var data keymapFile
-	if err = dec.Decode(&data); err != nil {
-		return nil, fmt.Errorf("读取键位失败: %w", err)
-	}
-	var extra any
-	if err = dec.Decode(&extra); err != io.EOF {
-		return nil, errors.New("键位文件存在多余内容")
-	}
-	if (data.Version != 1 && data.Version != 2) || (data.Version == 1 && data.Joystick != nil) || len(data.Keys) > 128 {
-		return nil, errors.New("不支持的键位文件")
-	}
-	for key, p := range data.Keys {
-		if !display.ValidKeyboardUsage(key) || p.X < 0 || p.X > 1 || p.Y < 0 || p.Y > 1 {
-			return nil, errors.New("键位文件包含无效的坐标或按键")
-		}
-		if data.Joystick != nil && joystickKey(key) {
-			return nil, errors.New("WASD 同时被方向摇杆和单点键位占用")
-		}
-	}
-	if p := data.Joystick; p != nil && (p.Center.X < 0 || p.Center.X > 1 || p.Center.Y < 0 || p.Center.Y > 1 || p.Radius < 0.04 || p.Radius > 0.25) {
-		return nil, errors.New("方向摇杆的坐标或半径无效")
-	}
-	if data.Keys == nil {
-		data.Keys = make(map[uint16]mappedPoint)
+	data, err := keymap.Parse(b)
+	if err != nil {
+		return nil, err
 	}
 	s.exists = true
 	s.revision = sha256.Sum256(b)
@@ -102,21 +66,11 @@ func (s *keymapStore) saveWithJoystick(keys map[uint16]mappedPoint, stick *joyst
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
-	// Windows mutex ownership is thread-affine; keep acquisition and release on
-	// the same OS thread even if a syscall causes the goroutine to reschedule.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	name, _ := windows.UTF16PtrFromString(`Local\NekoSimulator233-keymap`)
-	mutex, err := windows.CreateMutex(nil, false, name)
+	unlock, err := keymap.Lock()
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(mutex)
-	wait, err := windows.WaitForSingleObject(mutex, 0)
-	if err != nil || (wait != windows.WAIT_OBJECT_0 && wait != windows.WAIT_ABANDONED) {
-		return errors.New("另一个窗口正在保存键位，请重试")
-	}
-	defer windows.ReleaseMutex(mutex)
+	defer unlock()
 	current, err := os.ReadFile(s.path)
 	exists := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

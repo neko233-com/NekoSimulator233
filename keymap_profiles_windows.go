@@ -9,28 +9,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
+	"github.com/neko233-com/NekoSimulator233/internal/keymap"
 	"golang.org/x/sys/windows"
 )
 
-const defaultKeymapProfile = "默认"
+const defaultKeymapProfile = keymap.DefaultProfile
 
 func keymapProfilesDir(base string) string {
-	return filepath.Join(filepath.Dir(base), ".profiles", strings.TrimSuffix(filepath.Base(base), filepath.Ext(base)))
+	return keymap.ProfilesDir(base)
 }
 
 func validateKeymapProfileName(name string) error {
-	if name == "" || name == defaultKeymapProfile || !utf8.ValidString(name) || strings.TrimSpace(name) != name || strings.HasSuffix(name, ".") || !filepath.IsLocal(name) || strings.ContainsAny(name, `\/:*?"<>|`) {
-		return errors.New("方案名称无效或与默认方案冲突")
-	}
-	for _, r := range name {
-		if unicode.IsControl(r) {
-			return errors.New("方案名称不能包含控制字符")
-		}
-	}
-	return nil
+	return keymap.ValidateProfileName(name)
 }
 
 func keymapProfilePath(base, name string) (string, error) {

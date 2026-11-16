@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/neko233-com/NekoSimulator233/internal/keymap"
 	"golang.org/x/sys/windows"
 )
 
@@ -49,6 +50,7 @@ type backupManifest struct {
 	Format   int            `json:"format"`
 	Settings backupSettings `json:"settings"`
 	Files    []backupFile   `json:"files"`
+	Keymaps  []backupFile   `json:"keymaps,omitempty"`
 }
 
 func systemImageAPI(values map[string]string) (int, error) {
@@ -457,7 +459,13 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 	}
 	defer os.Remove(tmp.Name())
 	zw := zip.NewWriter(tmp)
-	manifest := backupManifest{Format: 2, Settings: settings}
+	manifest := backupManifest{Format: 3, Settings: settings}
+	manifest.Keymaps, err = writeKeymaps(ctx, zw, m, dir)
+	if err != nil {
+		zw.Close()
+		tmp.Close()
+		return err
+	}
 	for _, name := range names {
 		item := images[name]
 		header := &zip.FileHeader{Name: "images/" + name, Method: zip.Store}
@@ -614,10 +622,9 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		return fmt.Errorf("打开备份失败：%w", err)
 	}
 	defer z.Close()
-	if len(z.File) > len(backupImages)+1 {
-		return errors.New("备份包含多余文件")
-	}
 	entries := map[string]*zip.File{}
+	keymapEntries := map[string]*zip.File{}
+	keymapNames := map[string]bool{}
 	var manifestFile *zip.File
 	for _, f := range z.File {
 		if f.Name == "manifest.json" {
@@ -625,6 +632,15 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 				return errors.New("备份清单重复")
 			}
 			manifestFile = f
+			continue
+		}
+		if name, ok := strings.CutPrefix(f.Name, "keymaps/"); ok {
+			folded := strings.ToLower(name)
+			if !validArchiveKeymapName(name) || keymapNames[folded] || !f.Mode().IsRegular() || f.Method != zip.Store || f.UncompressedSize64 > keymap.MaxFileSize {
+				return errors.New("备份键位条目无效或重复")
+			}
+			keymapNames[folded] = true
+			keymapEntries[name] = f
 			continue
 		}
 		name, ok := strings.CutPrefix(f.Name, "images/")
@@ -636,14 +652,15 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		}
 		entries[name] = f
 	}
-	if manifestFile == nil || manifestFile.UncompressedSize64 > 64<<10 || manifestFile.Method != zip.Store {
+	manifestLimit := int64(64<<10) + int64(len(keymapEntries))*2048
+	if manifestFile == nil || manifestFile.UncompressedSize64 > uint64(manifestLimit) || manifestFile.Method != zip.Store {
 		return errors.New("备份清单缺失或无效")
 	}
 	reader, err := manifestFile.Open()
 	if err != nil {
 		return err
 	}
-	b, err := io.ReadAll(io.LimitReader(reader, (64<<10)+1))
+	b, err := io.ReadAll(io.LimitReader(reader, manifestLimit+1))
 	closeErr := reader.Close()
 	if err != nil {
 		return err
@@ -651,7 +668,7 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if len(b) > 64<<10 {
+	if int64(len(b)) > manifestLimit {
 		return errors.New("备份清单过大")
 	}
 	var manifest backupManifest
@@ -664,7 +681,7 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if err = decoder.Decode(&extra); err != io.EOF {
 		return errors.New("备份清单包含多余内容")
 	}
-	if manifest.Format != 2 || len(manifest.Files) != len(entries) || len(manifest.Files) == 0 {
+	if (manifest.Format != 2 && manifest.Format != 3) || len(manifest.Files) != len(entries) || len(manifest.Files) == 0 || len(manifest.Keymaps) != len(keymapEntries) || (manifest.Format == 2 && len(keymapEntries) != 0) {
 		return errors.New("备份版本或磁盘清单无效")
 	}
 	if err = validateBackupSettings(manifest.Settings); err != nil {
@@ -702,6 +719,22 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if _, ok := files["userdata-qemu.img"]; !ok {
 		return errors.New("备份缺少用户数据盘")
 	}
+	keymapFiles := map[string]backupFile{}
+	keymapSeen := map[string]bool{}
+	for _, f := range manifest.Keymaps {
+		entry := keymapEntries[f.Name]
+		folded := strings.ToLower(f.Name)
+		if !validArchiveKeymapName(f.Name) || entry == nil || keymapSeen[folded] || f.Size < 0 || f.Size > keymap.MaxFileSize || uint64(f.Size) != entry.UncompressedSize64 || f.Size > maxBackupTotal-total {
+			return errors.New("备份键位清单无效")
+		}
+		hash, err := hex.DecodeString(f.SHA256)
+		if err != nil || len(hash) != sha256.Size {
+			return errors.New("备份键位校验值无效")
+		}
+		keymapSeen[folded] = true
+		keymapFiles[f.Name] = f
+		total += f.Size
+	}
 	root, err := windows.UTF16PtrFromString(m.Home)
 	if err != nil {
 		return err
@@ -717,8 +750,18 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if err != nil {
 		return err
 	}
+	embedded := filepath.Join(stage, keymap.EmbeddedDirectory)
+	keymapBase := filepath.Join(embedded, "default.json")
+	profileDir := keymap.ProfilesDir(keymapBase)
+	var createdKeymaps []string
 	// Only remove exact files created in our private staging directory.
 	defer func() {
+		for _, path := range createdKeymaps {
+			_ = os.Remove(path)
+		}
+		_ = os.Remove(profileDir)
+		_ = os.Remove(filepath.Dir(profileDir))
+		_ = os.Remove(embedded)
 		for name := range backupImages {
 			_ = os.Remove(filepath.Join(stage, name))
 		}
@@ -726,6 +769,63 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		_ = os.Remove(filepath.Join(stage, "version_num.cache"))
 		_ = os.Remove(stage)
 	}()
+	// An empty local keymap directory also prevents a legacy archive restored to
+	// a reused name from silently inheriting unrelated existing host keymaps.
+	if err := os.Mkdir(embedded, 0700); err != nil {
+		return err
+	}
+	keymapNamesSorted := make([]string, 0, len(keymapFiles))
+	for name := range keymapFiles {
+		keymapNamesSorted = append(keymapNamesSorted, name)
+	}
+	sort.Strings(keymapNamesSorted)
+	for _, name := range keymapNamesSorted {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entry := keymapEntries[name]
+		reader, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(reader, keymapFiles[name].Size+1))
+		closeErr := reader.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		sum := sha256.Sum256(data)
+		if int64(len(data)) != keymapFiles[name].Size || !strings.EqualFold(hex.EncodeToString(sum[:]), keymapFiles[name].SHA256) {
+			return errors.New("备份键位校验失败")
+		}
+		if _, err := keymap.Parse(data); err != nil {
+			return fmt.Errorf("备份键位内容无效：%w", err)
+		}
+		destination := keymapBase
+		if profile, ok := strings.CutPrefix(name, "profiles/"); ok {
+			if err := os.MkdirAll(profileDir, 0700); err != nil {
+				return err
+			}
+			destination = filepath.Join(profileDir, profile)
+		}
+		file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		createdKeymaps = append(createdKeymaps, destination)
+		_, writeErr := file.Write(data)
+		if writeErr == nil {
+			writeErr = file.Sync()
+		}
+		if closeErr := file.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			return writeErr
+		}
+	}
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)

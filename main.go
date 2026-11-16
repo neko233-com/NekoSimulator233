@@ -75,8 +75,15 @@ func (a *app) startIndependent() {
 			cancel()
 		}
 		var source *avd.Controller
+		var bindingsPath string
 		if err == nil {
 			source, err = instance.Open()
+		}
+		if err == nil {
+			bindingsPath, err = resolveKeymapPathForInstance(name)
+			if err != nil {
+				_ = source.Close()
+			}
 		}
 		a.window.Update(func() {
 			a.busy = false
@@ -92,7 +99,7 @@ func (a *app) startIndependent() {
 			if a.viewers == nil {
 				a.viewers = make(map[string]*viewer)
 			}
-			a.viewers[key] = openViewer(name, source, keymapPathForInstance(name), func() { delete(a.viewers, key) })
+			a.viewers[key] = openViewer(name, source, bindingsPath, func() { delete(a.viewers, key) })
 		})
 	}()
 }
