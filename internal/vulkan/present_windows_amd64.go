@@ -125,6 +125,7 @@ type presentResources struct {
 	procs                                                   presentProcs
 	pool, acquireFence, renderFence, presentFence, finished uint64
 	acquirePending, renderPending, presentPending           bool
+	staging                                                 *stagingBuffer
 }
 
 func (op *presentResources) releaseIfSafe(h *Host) error {
@@ -147,6 +148,10 @@ func (op *presentResources) releaseIfSafe(h *Host) error {
 		default:
 			return fmt.Errorf("查询 Vulkan 栅栏失败：VkResult %d", int32(r))
 		}
+	}
+	if op.staging != nil {
+		op.staging.release(h)
+		op.staging = nil
 	}
 	if op.pool != 0 {
 		_, _ = call(op.procs.destroyPool, h.device, uintptr(op.pool), 0)
@@ -231,6 +236,21 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 			return errors.New("颜色分量必须在 0 到 1 之间")
 		}
 	}
+	return s.presentFrame(frameHooks{record: func(_ *Host, op *presentResources, cmd uintptr, image uint64, rangeInfo *imageSubresourceRange) (uint32, uint32, error) {
+		_, err := call(op.procs.clear, cmd, uintptr(image), vkLayoutTransferDst, uintptr(unsafe.Pointer(&color[0])), 1, uintptr(unsafe.Pointer(rangeInfo)))
+		runtime.KeepAlive(color)
+		return vkLayoutTransferDst, vkAccessTransferWrite, err
+	}})
+}
+
+type frameHooks struct {
+	validate func(*Host) error
+	prepare  func(*Host, *presentResources) error
+	record   func(*Host, *presentResources, uintptr, uint64, *imageSubresourceRange) (uint32, uint32, error)
+	verify   func(*Host, *presentResources) error
+}
+
+func (s *Swapchain) presentFrame(hooks frameHooks) (err error) {
 	h := s.host
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -242,6 +262,11 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 	}
 	if s.poisoned || s.pending != nil {
 		return errors.New("交换链需要关闭后重建")
+	}
+	if hooks.validate != nil {
+		if err := hooks.validate(h); err != nil {
+			return err
+		}
 	}
 	p, err := h.presentProcs()
 	if err != nil {
@@ -259,6 +284,11 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 	}()
 	if err = op.create(h); err != nil {
 		return err
+	}
+	if hooks.prepare != nil {
+		if err = hooks.prepare(h, op); err != nil {
+			return err
+		}
 	}
 	alloc := commandBufferAllocateInfo{SType: 40, Pool: op.pool, Count: 1}
 	var cmd uintptr
@@ -302,13 +332,13 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 	if e != nil {
 		return e
 	}
-	_, e = call(p.clear, cmd, uintptr(s.images[index]), vkLayoutTransferDst, uintptr(unsafe.Pointer(&color[0])), 1, uintptr(unsafe.Pointer(&rangeInfo)))
+	oldLayout, oldAccess, e := hooks.record(h, op, cmd, s.images[index], &rangeInfo)
 	if e != nil {
 		return e
 	}
-	barrier.SrcAccess = vkAccessTransferWrite
+	barrier.SrcAccess = oldAccess
 	barrier.DstAccess = 0
-	barrier.OldLayout = vkLayoutTransferDst
+	barrier.OldLayout = oldLayout
 	barrier.NewLayout = vkLayoutPresent
 	_, e = call(p.barrier, cmd, vkStageTransfer, vkStageBottom, 0, 0, 0, 0, 0, 1, uintptr(unsafe.Pointer(&barrier)))
 	if e != nil {
@@ -331,6 +361,15 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 		return e
 	}
 	op.renderPending = true
+	if hooks.verify != nil {
+		if err = waitFence(p, h.device, &op.renderFence); err != nil {
+			return err
+		}
+		op.renderPending = false
+		if err = hooks.verify(h, op); err != nil {
+			return err
+		}
+	}
 	presentFence := presentFenceInfo{SType: 1000275001, Count: 1, Fences: &op.presentFence}
 	present := presentInfo{SType: 1000001001, Next: unsafe.Pointer(&presentFence), WaitCount: 1, WaitSemaphores: &op.finished, SwapchainCount: 1, Swapchains: &s.swapchain, ImageIndices: &index}
 	r, e = call(p.present, h.queue, uintptr(unsafe.Pointer(&present)))
@@ -343,10 +382,12 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 	if presentResult == vkSuccess || presentResult == vkSuboptimal || presentResult == vkOutOfDate || presentResult == vkSurfaceLost || presentResult == vkFullscreenLost {
 		op.presentPending = true
 	}
-	if err = waitFence(p, h.device, &op.renderFence); err != nil {
-		return err
+	if op.renderPending {
+		if err = waitFence(p, h.device, &op.renderFence); err != nil {
+			return err
+		}
+		op.renderPending = false
 	}
-	op.renderPending = false
 	if op.presentPending {
 		if err = waitFence(p, h.device, &op.presentFence); err != nil {
 			return err

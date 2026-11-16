@@ -14,8 +14,14 @@ import (
 )
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "--vulkan-present-probe" {
-		info, err := vulkan.ProbePresent()
+	if len(os.Args) == 2 && (os.Args[1] == "--vulkan-present-probe" || os.Args[1] == "--vulkan-pixel-probe") {
+		var info vulkan.DeviceInfo
+		var err error
+		if os.Args[1] == "--vulkan-pixel-probe" {
+			info, err = vulkan.ProbePixels()
+		} else {
+			info, err = vulkan.ProbePresent()
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

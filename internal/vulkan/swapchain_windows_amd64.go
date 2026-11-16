@@ -22,6 +22,7 @@ const (
 	vkFormatBGRA8SRGB       = 50
 	vkColorSpaceSRGB        = 0
 	vkPresentFIFO           = 2
+	vkUsageTransferSrc      = 0x1
 	vkUsageTransferDst      = 0x2
 )
 
@@ -70,6 +71,7 @@ type Swapchain struct {
 	images                           []uint64
 	extent                           extent2D
 	format                           surfaceFormat
+	usage                            uint32
 	pending                          *presentResources
 	poisoned                         bool
 }
@@ -80,6 +82,7 @@ type SwapchainInfo struct {
 	Format         uint32 `json:"format"`
 	ImageCount     int    `json:"image_count"`
 	ClearSubmitted bool   `json:"clear_submitted,omitempty"`
+	PixelsVerified bool   `json:"pixels_verified,omitempty"`
 }
 
 func (s *Swapchain) Info() SwapchainInfo {
@@ -326,7 +329,11 @@ func (h *Host) CreateSwapchain(hwnd uintptr) (_ *Swapchain, err error) {
 	if e != nil {
 		return nil, e
 	}
-	info := swapchainCreateInfo{SType: vkStructureSwapchain, Surface: s.surface, MinImageCount: count, ImageFormat: format.Format, ImageColorSpace: format.ColorSpace, ImageExtent: extent, ImageArrayLayers: 1, ImageUsage: vkUsageTransferDst, PreTransform: caps.CurrentTransform, CompositeAlpha: alpha, PresentMode: vkPresentFIFO, Clipped: 1}
+	usage := uint32(vkUsageTransferDst)
+	if caps.SupportedUsageFlags&vkUsageTransferSrc != 0 {
+		usage |= vkUsageTransferSrc
+	}
+	info := swapchainCreateInfo{SType: vkStructureSwapchain, Surface: s.surface, MinImageCount: count, ImageFormat: format.Format, ImageColorSpace: format.ColorSpace, ImageExtent: extent, ImageArrayLayers: 1, ImageUsage: usage, PreTransform: caps.CurrentTransform, CompositeAlpha: alpha, PresentMode: vkPresentFIFO, Clipped: 1}
 	var chain uint64
 	r, e = call(createSwapchain, h.device, uintptr(unsafe.Pointer(&info)), 0, uintptr(unsafe.Pointer(&chain)))
 	runtime.KeepAlive(info)
@@ -344,7 +351,7 @@ func (h *Host) CreateSwapchain(hwnd uintptr) (_ *Swapchain, err error) {
 	if e != nil {
 		return nil, e
 	}
-	s.extent, s.format = extent, format
+	s.extent, s.format, s.usage = extent, format, usage
 	if h.swapchains == nil {
 		h.swapchains = make(map[*Swapchain]struct{})
 	}

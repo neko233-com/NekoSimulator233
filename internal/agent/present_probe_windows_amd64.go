@@ -31,14 +31,18 @@ func (b *boundedOutput) Write(data []byte) (int, error) {
 
 // A dedicated subprocess contains any stalled GPU work and owns its hidden
 // window. It is terminated on timeout, without affecting running emulators.
-func runPresentProbe(ctx context.Context) (vulkan.DeviceInfo, error) {
+func runPresentProbe(ctx context.Context, pixels bool) (vulkan.DeviceInfo, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return vulkan.DeviceInfo{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "--vulkan-present-probe")
+	mode := "--vulkan-present-probe"
+	if pixels {
+		mode = "--vulkan-pixel-probe"
+	}
+	cmd := exec.CommandContext(ctx, exe, mode)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stdout, stderr boundedOutput
 	stdout.limit, stderr.limit = 65536, 16384
@@ -65,6 +69,9 @@ func runPresentProbe(ctx context.Context) (vulkan.DeviceInfo, error) {
 	}
 	if info.TestSurface == nil || !info.TestSurface.ClearSubmitted {
 		return vulkan.DeviceInfo{}, errors.New("Vulkan 呈现测试没有完成提交")
+	}
+	if pixels && !info.TestSurface.PixelsVerified {
+		return vulkan.DeviceInfo{}, errors.New("Vulkan 像素回读测试没有完成")
 	}
 	return info, nil
 }

@@ -357,7 +357,7 @@ func InspectHost(testSurface bool) (DeviceInfo, error) {
 	info := h.Info()
 	if testSurface {
 		var surface SwapchainInfo
-		surface, err = inspectHiddenSurface(h, false)
+		surface, err = inspectHiddenSurface(h, false, false)
 		if err != nil {
 			_ = h.Close()
 			return DeviceInfo{}, err
@@ -373,12 +373,20 @@ func InspectHost(testSurface bool) (DeviceInfo, error) {
 // ProbePresent is only for a short-lived subprocess. On a GPU timeout it
 // leaves pending native resources intact and the subprocess must terminate.
 func ProbePresent() (DeviceInfo, error) {
+	return probePresent(false)
+}
+
+// ProbePixels additionally uploads a patterned frame and verifies GPU readback.
+// Like ProbePresent it must run in a short-lived subprocess.
+func ProbePixels() (DeviceInfo, error) { return probePresent(true) }
+
+func probePresent(pixels bool) (DeviceInfo, error) {
 	h, err := OpenHost()
 	if err != nil {
 		return DeviceInfo{}, err
 	}
 	info := h.Info()
-	surface, err := inspectHiddenSurface(h, true)
+	surface, err := inspectHiddenSurface(h, true, pixels)
 	if err != nil {
 		_ = h.Close()
 		return DeviceInfo{}, err

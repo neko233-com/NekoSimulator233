@@ -36,7 +36,7 @@ func TestStdioExecutable(t *testing.T) {
 		t.Fatalf("status failed: %v", err)
 	}
 	if os.Getenv("NEKO_TEST_HOST_VULKAN") == "1" {
-		result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{"test_present": true}})
+		result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{"test_pixels": true}})
 		if err != nil || result.IsError {
 			t.Fatalf("host Vulkan surface failed: %v", err)
 		}
@@ -50,9 +50,10 @@ func TestStdioExecutable(t *testing.T) {
 				Height         int  `json:"height"`
 				ImageCount     int  `json:"image_count"`
 				ClearSubmitted bool `json:"clear_submitted"`
+				PixelsVerified bool `json:"pixels_verified"`
 			} `json:"test_surface"`
 		}
-		if err := json.Unmarshal(data, &decoded); err != nil || decoded.Surface.Width == 0 || decoded.Surface.Height == 0 || decoded.Surface.ImageCount == 0 || !decoded.Surface.ClearSubmitted {
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded.Surface.Width == 0 || decoded.Surface.Height == 0 || decoded.Surface.ImageCount == 0 || !decoded.Surface.ClearSubmitted || !decoded.Surface.PixelsVerified {
 			t.Fatalf("invalid Vulkan surface response %s: %v", data, err)
 		}
 	}

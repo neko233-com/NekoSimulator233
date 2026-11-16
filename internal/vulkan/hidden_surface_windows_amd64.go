@@ -4,6 +4,7 @@ package vulkan
 
 import (
 	"fmt"
+	"image"
 	"runtime"
 	"unsafe"
 
@@ -14,7 +15,7 @@ import (
 // this process. Its swapchain is closed before the HWND is destroyed.
 // present is reserved for a short-lived probe process: if the GPU stops
 // responding, the process must exit to let Windows release its resources.
-func inspectHiddenSurface(h *Host, present bool) (SwapchainInfo, error) {
+func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	createWindow := user32.NewProc("CreateWindowExW")
@@ -49,6 +50,27 @@ func inspectHiddenSurface(h *Host, present bool) (SwapchainInfo, error) {
 			return SwapchainInfo{}, err
 		}
 		info.ClearSubmitted = true
+	}
+	if pixels {
+		if info.Width != 64 || info.Height != 64 {
+			_ = s.Close()
+			return SwapchainInfo{}, fmt.Errorf("测试窗口尺寸异常：%dx%d", info.Width, info.Height)
+		}
+		frame := image.NewRGBA(image.Rect(0, 0, int(info.Width), int(info.Height)))
+		for y := 0; y < frame.Rect.Dy(); y++ {
+			for x := 0; x < frame.Rect.Dx(); x++ {
+				i := y*frame.Stride + x*4
+				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3] = byte(x*3), byte(y*3), byte(x+y), 255
+			}
+		}
+		if err := s.PresentRGBA(frame, true); err != nil {
+			if closeErr := s.Close(); closeErr != nil {
+				destroy = false
+				return SwapchainInfo{}, fmt.Errorf("%v；%w", err, closeErr)
+			}
+			return SwapchainInfo{}, err
+		}
+		info.PixelsVerified = true
 	}
 	if err := s.Close(); err != nil {
 		return SwapchainInfo{}, err

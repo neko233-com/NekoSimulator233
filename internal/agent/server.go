@@ -22,7 +22,7 @@ type Service struct {
 	selected         string
 	controlReadiness avd.ControlReadiness
 	hostProbe        func(bool) (vulkan.DeviceInfo, error)
-	presentProbe     func(context.Context) (vulkan.DeviceInfo, error)
+	presentProbe     func(context.Context, bool) (vulkan.DeviceInfo, error)
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -32,6 +32,7 @@ type Empty struct{}
 type HostVulkanRequest struct {
 	TestSurface bool `json:"test_surface,omitempty" jsonschema:"Create and destroy a small hidden test window and Vulkan swapchain"`
 	TestPresent bool `json:"test_present,omitempty" jsonschema:"In an isolated subprocess, submit a solid-color frame to a hidden test swapchain and wait for GPU and presentation fences"`
+	TestPixels  bool `json:"test_pixels,omitempty" jsonschema:"In an isolated subprocess upload and verify a patterned frame using GPU readback; also performs test_present"`
 }
 type State struct {
 	Ready           bool   `json:"ready"`
@@ -134,7 +135,7 @@ func newServer(s *Service) *mcp.Server {
 	}
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
-	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect Windows host Vulkan hardware; optionally create a hidden swapchain or submit a solid-color frame in an isolated subprocess. Does not start an emulator or prove visible on-screen pixels."), s.hostVulkan)
+	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect host Vulkan hardware; optionally test a hidden swapchain, submit a frame, or verify pixel readback in an isolated subprocess. Does not start an emulator or prove visible on-screen pixels."), s.hostVulkan)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance using an installed Android image, with optional API 30 for 32-bit compatibility; never overwrites data and does not start it."), s.createInstance)
@@ -173,12 +174,12 @@ func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, reques
 	}
 	var info vulkan.DeviceInfo
 	var err error
-	if request.TestPresent {
+	if request.TestPresent || request.TestPixels {
 		probe := s.presentProbe
 		if probe == nil {
 			probe = runPresentProbe
 		}
-		info, err = probe(ctx)
+		info, err = probe(ctx, request.TestPixels)
 	} else {
 		probe := s.hostProbe
 		if probe == nil {

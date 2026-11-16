@@ -3,6 +3,7 @@
 package vulkan
 
 import (
+	"image"
 	"math"
 	"os"
 	"runtime"
@@ -128,7 +129,7 @@ func TestLiveSwapchainOnOwnedHiddenWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer h.Close()
-	probe, err := inspectHiddenSurface(h, false)
+	probe, err := inspectHiddenSurface(h, false, false)
 	if err != nil || probe.Width == 0 || probe.Height == 0 || probe.ImageCount == 0 {
 		t.Fatalf("hidden surface probe %+v: %v", probe, err)
 	}
@@ -147,6 +148,18 @@ func TestLiveSwapchainOnOwnedHiddenWindow(t *testing.T) {
 			t.Fatalf("clear and present: %v", err)
 		}
 		t.Log("submitted a clear and waited for rendering and presentation fences")
+		frame := image.NewRGBA(image.Rect(0, 0, int(s.extent.Width), int(s.extent.Height)))
+		for y := 0; y < frame.Rect.Dy(); y++ {
+			for x := 0; x < frame.Rect.Dx(); x++ {
+				i := y*frame.Stride + x*4
+				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3] = byte(x*3), byte(y*3), byte(x+y), 255
+			}
+		}
+		verify := s.usage&vkUsageTransferSrc != 0
+		if err := s.PresentRGBA(frame, verify); err != nil {
+			t.Fatalf("RGBA upload and presentation: %v", err)
+		}
+		t.Logf("uploaded RGBA frame; GPU readback verified=%v", verify)
 	} else {
 		t.Log("presentation-fence extension unavailable; clear/present skipped")
 	}
