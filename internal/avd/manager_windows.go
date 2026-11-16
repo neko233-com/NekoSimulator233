@@ -319,7 +319,7 @@ func (m Manager) adb(ctx context.Context, serial string, args ...string) ([]byte
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("ADB 命令失败：%w", err)
+		return out, fmt.Errorf("ADB 命令失败：%w", err)
 	}
 	return out, nil
 }
@@ -586,12 +586,32 @@ func (m Manager) InstallAPK(ctx context.Context, instance Instance, path string,
 	args = append(args, full)
 	out, err := m.adb(ctx, instance.Serial, args...)
 	if err != nil {
-		return fmt.Errorf("安装 APK 失败：%w", err)
+		return apkInstallError(out, err)
 	}
 	if !strings.Contains(string(out), "Success") {
 		return errors.New("APK 安装未返回成功状态")
 	}
 	return nil
+}
+
+// Android's package-manager rejection (e.g. a conflicting package signature)
+// is usually printed by adb, not represented by its process exit status.
+func apkInstallError(output []byte, err error) error {
+	reason := strings.TrimSpace(string(output))
+	if reason == "" {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			reason = strings.TrimSpace(string(exitErr.Stderr))
+		}
+	}
+	if reason == "" {
+		return fmt.Errorf("安装 APK 失败：%w", err)
+	}
+	const maxReason = 2048
+	if runes := []rune(reason); len(runes) > maxReason {
+		reason = string(runes[len(runes)-maxReason:])
+	}
+	return fmt.Errorf("安装 APK 失败：%s：%w", reason, err)
 }
 
 func (m Manager) PressKey(ctx context.Context, instance Instance, keycode int) error {

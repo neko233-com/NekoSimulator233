@@ -97,6 +97,51 @@ func (a *app) stopIndependent() {
 	}()
 }
 
+// chooseAPK keeps the native picker and ADB work off the UI thread. The
+// explicit update action is the only path that permits replacing a package.
+func (a *app) chooseAPK(replace bool) {
+	if a.busy {
+		return
+	}
+	a.busy = true
+	a.message = "请选择要安装到独立实例的 APK…"
+	parent := a.window
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: parent, Title: "选择 Android APK", Filters: []mygo.FileFilter{{Name: "Android APK", Extensions: []string{"apk"}}},
+		})
+		if err == nil && len(paths) != 0 {
+			parent.Update(func() { a.message = "正在安装 APK，请稍候…" })
+			manager, discoverErr := avd.DiscoverManager()
+			err = discoverErr
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				instance, readyErr := manager.Ready(ctx)
+				cancel()
+				err = readyErr
+				if err == nil {
+					ctx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
+					err = manager.InstallAPK(ctx, instance, paths[0], replace)
+					cancel()
+				}
+			}
+		}
+		parent.Update(func() {
+			a.busy = false
+			switch {
+			case err != nil:
+				a.message = "APK 安装失败：" + err.Error()
+			case len(paths) == 0:
+				a.message = "已取消选择 APK"
+			case replace:
+				a.message = "APK 已安装或更新，可在独立实例中打开"
+			default:
+				a.message = "APK 安装完成，可在独立实例中打开"
+			}
+		})
+	}()
+}
+
 func (a *app) refresh() {
 	if a.busy {
 		return
@@ -178,6 +223,14 @@ func (a *app) view(c *ui.Context) {
 		if ui.Button(c.Key("stop-independent"), "关闭独立实例").Disabled(a.busy).Clicked() {
 			a.stopIndependent()
 		}
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("install-apk"), "安装 APK…").Disabled(a.busy).Clicked() {
+				a.chooseAPK(false)
+			}
+			if ui.Button(c.Key("update-apk"), "更新 APK…").Disabled(a.busy).Clicked() {
+				a.chooseAPK(true)
+			}
+		})
 		if ui.Button(c.Key("refresh"), "刷新实例").Disabled(a.busy).Clicked() {
 			a.refresh()
 		}

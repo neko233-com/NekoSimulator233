@@ -4,14 +4,90 @@ package avd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	if record := os.Getenv("NEKO_TEST_FAKE_ADB_RECORD"); record != "" {
+		args, err := json.Marshal(os.Args[1:])
+		if err != nil || os.WriteFile(record, args, 0600) != nil {
+			os.Exit(2)
+		}
+		if os.Getenv("NEKO_TEST_FAKE_ADB_FAILURE") == "1" {
+			fmt.Fprintln(os.Stderr, "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]")
+			os.Exit(1)
+		}
+		fmt.Println("Success")
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestInstallAPKUsesExplicitReplacementAndReportsFailure(t *testing.T) {
+	root := t.TempDir()
+	adb := filepath.Join(root, "platform-tools", "adb.exe")
+	if err := os.MkdirAll(filepath.Dir(adb), 0700); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(self, adb); err != nil {
+		t.Skipf("cannot link isolated fake adb executable: %v", err)
+	}
+	record := filepath.Join(root, "args.json")
+	t.Setenv("NEKO_TEST_FAKE_ADB_RECORD", record)
+	apk := filepath.Join(root, "app with space.apk")
+	if err := os.WriteFile(apk, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := Manager{SDK: root}
+	instance := Instance{Serial: "emulator-5554"}
+	for _, tc := range []struct {
+		replace bool
+		flag    string
+	}{{false, "-R"}, {true, "-r"}} {
+		if err := m.InstallAPK(context.Background(), instance, apk, tc.replace); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var args []string
+		if err := json.Unmarshal(data, &args); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"-s", instance.Serial, "install", tc.flag, apk}; !slices.Equal(args, want) {
+			t.Fatalf("adb args %q, want %q", args, want)
+		}
+	}
+	t.Setenv("NEKO_TEST_FAKE_ADB_FAILURE", "1")
+	if err := m.InstallAPK(context.Background(), instance, apk, true); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+		t.Fatalf("missing Android package manager failure: %v", err)
+	}
+}
+
+func TestAPKInstallErrorIncludesPackageManagerReason(t *testing.T) {
+	underlying := errors.New("exit status 1")
+	err := apkInstallError([]byte("Failure [INSTALL_FAILED_ALREADY_EXISTS]"), underlying)
+	if !errors.Is(err, underlying) || !strings.Contains(err.Error(), "INSTALL_FAILED_ALREADY_EXISTS") {
+		t.Fatalf("package manager reason missing: %v", err)
+	}
+	err = apkInstallError([]byte(strings.Repeat("较", 3000)+"签名错误"), underlying)
+	if !strings.Contains(err.Error(), "签名错误") || len([]rune(err.Error())) > 2100 {
+		t.Fatalf("unbounded or truncated useful reason: %v", err)
+	}
+}
 
 func TestDiscoveryDoesNotTreatUnknownStateAsStopped(t *testing.T) {
 	dir := t.TempDir()
