@@ -151,7 +151,11 @@ func (s *keymapStore) saveWithJoystick(keys map[uint16]mappedPoint, stick *joyst
 	}
 	from, _ := windows.UTF16PtrFromString(f.Name())
 	to, _ := windows.UTF16PtrFromString(s.path)
-	if err = windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
+	flags := uint32(windows.MOVEFILE_WRITE_THROUGH)
+	if exists {
+		flags |= windows.MOVEFILE_REPLACE_EXISTING
+	}
+	if err = windows.MoveFileEx(from, to, flags); err != nil {
 		return err
 	}
 	s.exists = true

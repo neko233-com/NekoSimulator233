@@ -54,6 +54,10 @@ type viewer struct {
 	bindings      map[uint16]mappedPoint
 	joystick      *joystickConfig
 	keymap        *keymapStore
+	baseKeymap    string
+	profile       string
+	profiles      []string
+	profileName   string
 	editing       int // 0 normal, 1 bind, 2 remove, 3 joystick position
 	pendingPoint  *mappedPoint
 	mappingError  string
@@ -62,6 +66,8 @@ type viewer struct {
 func openViewer(name string, source display.Session, bindingsPath string, onClosed func()) *viewer {
 	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), message: "正在读取画面…"}
 	if _, ok := source.(display.MultiTouch); ok {
+		v.baseKeymap = bindingsPath
+		v.profile = defaultKeymapProfile
 		v.keymap = &keymapStore{path: bindingsPath}
 		var err error
 		v.bindings, err = v.keymap.read()
@@ -69,6 +75,8 @@ func openViewer(name string, source display.Session, bindingsPath string, onClos
 		if err != nil {
 			v.mappingError = err.Error()
 			v.keymap = nil
+		} else if v.profiles, err = listKeymapProfiles(bindingsPath); err != nil {
+			v.mappingError = err.Error()
 		}
 	}
 	v.win = mygo.NewWindow(mygo.WindowOptions{Title: name + " - NekoSimulator233", Width: 1000, Height: 650, Content: ui.View(v.view)})
@@ -348,6 +356,25 @@ func (v *viewer) view(c *ui.Context) {
 			}
 		})
 		if v.keymap != nil && v.editing != 0 {
+			ui.Row(c).Gap(6).Children(func() {
+				selected := v.activeProfile()
+				if ui.Select(c.Key("keymap-profile"), &selected, v.profileChoices()).Label("键位方案").Changed() && selected != v.activeProfile() {
+					if err := v.switchKeymapProfile(selected); err != nil {
+						v.mappingError = err.Error()
+					} else {
+						v.mappingError = ""
+					}
+				}
+				ui.TextInput(c.Key("keymap-profile-name"), &v.profileName).Placeholder("新方案名称").Label("新方案名称").Width(150)
+				if ui.Button(c.Key("create-keymap-profile"), "保存为新方案").Clicked() {
+					if err := v.createKeymapProfile(v.profileName); err != nil {
+						v.mappingError = err.Error()
+					} else {
+						v.mappingError = ""
+						v.profileName = ""
+					}
+				}
+			})
 			ui.Row(c).Gap(6).Children(func() {
 				if ui.Button(c.Key("set-joystick"), "设置 WASD 摇杆").Clicked() {
 					v.editing = 3
