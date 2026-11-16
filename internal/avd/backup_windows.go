@@ -38,6 +38,7 @@ type backupFile struct {
 }
 type backupSettings struct {
 	API         int    `json:"api"`
+	ImageTag    string `json:"image_tag,omitempty"`
 	SystemBuild int64  `json:"system_build"`
 	Cores       int    `json:"cores"`
 	RAM         int    `json:"ram_mib"`
@@ -54,17 +55,35 @@ type backupManifest struct {
 }
 
 func systemImageAPI(values map[string]string) (int, error) {
+	api, _, err := systemImageIdentity(values)
+	return api, err
+}
+
+// Only these exact SDK-relative image identities may be used for a guest disk.
+func systemImageIdentity(values map[string]string) (int, string, error) {
 	image := strings.ToLower(strings.ReplaceAll(strings.Trim(values["image.sysdir.1"], `\/ `), `\`, "/"))
+	var api int
+	var tag string
 	switch image {
 	case "system-images/android-30/google_apis/x86_64":
-		return 30, nil
+		api, tag = 30, "google_apis"
 	case "system-images/android-34/google_apis/x86_64":
-		return 34, nil
+		api, tag = 34, "google_apis"
 	case "system-images/android-35/google_apis/x86_64":
-		return 35, nil
+		api, tag = 35, "google_apis"
+	case "system-images/android-30/google_apis_playstore/x86_64":
+		api, tag = 30, "google_apis_playstore"
+	case "system-images/android-34/google_apis_playstore/x86_64":
+		api, tag = 34, "google_apis_playstore"
+	case "system-images/android-35/google_apis_playstore/x86_64":
+		api, tag = 35, "google_apis_playstore"
 	default:
-		return 0, errors.New("仅支持 Android 30/34/35 google_apis x86_64 实例")
+		return 0, "", errors.New("仅支持 Android 30/34/35 Google APIs 或 Google Play x86_64 实例")
 	}
+	if configured := strings.TrimSpace(values["tag.id"]); configured != "" && configured != tag {
+		return 0, "", errors.New("实例镜像标签与路径不一致")
+	}
+	return api, tag, nil
 }
 
 func settingsFromINI(values map[string]string) (backupSettings, error) {
@@ -73,7 +92,7 @@ func settingsFromINI(values map[string]string) (backupSettings, error) {
 			return backupSettings{}, fmt.Errorf("不支持迁移自定义磁盘路径 %s", key)
 		}
 	}
-	api, err := systemImageAPI(values)
+	api, tag, err := systemImageIdentity(values)
 	if err != nil {
 		return backupSettings{}, err
 	}
@@ -116,6 +135,9 @@ func settingsFromINI(values map[string]string) (backupSettings, error) {
 		return backupSettings{}, errors.New("实例数据盘大小无效")
 	}
 	settings := backupSettings{API: api, Cores: cores, RAM: ram, Width: w, Height: h, Density: density, DataSize: size}
+	if tag == "google_apis_playstore" {
+		settings.ImageTag = tag
+	}
 	if err := validateBackupSettings(settings); err != nil {
 		return backupSettings{}, err
 	}
@@ -168,7 +190,7 @@ func (m Manager) guardSystemBuild() (func(), error) {
 	if strings.TrimSpace(values["disk.dataPartition.path"]) != "" {
 		return nil, errors.New("实例使用自定义数据盘路径，无法安全检查系统镜像版本")
 	}
-	api, err := systemImageAPI(values)
+	api, tag, err := systemImageIdentity(values)
 	if err != nil {
 		return nil, fmt.Errorf("无法安全检查系统镜像版本：%w", err)
 	}
@@ -176,7 +198,7 @@ func (m Manager) guardSystemBuild() (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("数据盘存在但版本缓存不可读，已阻止可能清空数据的启动：%w", err)
 	}
-	propsPath := filepath.Join(m.SDK, "system-images", fmt.Sprintf("android-%d", api), "google_apis", "x86_64", "build.prop")
+	propsPath := filepath.Join(m.SDK, "system-images", fmt.Sprintf("android-%d", api), tag, "x86_64", "build.prop")
 	propsLock, err := openOfflineImage(propsPath)
 	if err != nil {
 		cache.Close()
@@ -459,7 +481,11 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 	}
 	defer os.Remove(tmp.Name())
 	zw := zip.NewWriter(tmp)
-	manifest := backupManifest{Format: 3, Settings: settings}
+	format := 3
+	if settings.ImageTag == "google_apis_playstore" {
+		format = 4
+	}
+	manifest := backupManifest{Format: format, Settings: settings}
 	manifest.Keymaps, err = writeKeymaps(ctx, zw, m, dir)
 	if err != nil {
 		zw.Close()
@@ -533,6 +559,9 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 func validateBackupSettings(s backupSettings) error {
 	if s.API != 30 && s.API != 34 && s.API != 35 {
 		return errors.New("备份的 Android 版本不受支持")
+	}
+	if s.ImageTag != "" && s.ImageTag != "google_apis_playstore" {
+		return errors.New("备份的系统镜像标签不受支持")
 	}
 	if s.Cores < 1 || s.Cores > 64 || s.RAM < 512 || s.RAM > 131072 || s.Width < 320 || s.Width > 8192 || s.Height < 320 || s.Height > 8192 || s.Density < 72 || s.Density > 1000 {
 		return errors.New("备份的硬件配置超出支持范围")
@@ -681,7 +710,7 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if err = decoder.Decode(&extra); err != io.EOF {
 		return errors.New("备份清单包含多余内容")
 	}
-	if (manifest.Format != 2 && manifest.Format != 3) || len(manifest.Files) != len(entries) || len(manifest.Files) == 0 || len(manifest.Keymaps) != len(keymapEntries) || (manifest.Format == 2 && len(keymapEntries) != 0) {
+	if (manifest.Format != 2 && manifest.Format != 3 && manifest.Format != 4) || len(manifest.Files) != len(entries) || len(manifest.Files) == 0 || len(manifest.Keymaps) != len(keymapEntries) || (manifest.Format == 2 && len(keymapEntries) != 0) || (manifest.Format < 4 && manifest.Settings.ImageTag != "") || (manifest.Format == 4 && manifest.Settings.ImageTag != "google_apis_playstore") {
 		return errors.New("备份版本或磁盘清单无效")
 	}
 	if err = validateBackupSettings(manifest.Settings); err != nil {
@@ -690,9 +719,13 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 	if manifest.Settings.SystemBuild <= 0 {
 		return errors.New("备份缺少系统镜像版本，拒绝可能清空数据的恢复")
 	}
-	imagePath := filepath.Join("system-images", fmt.Sprintf("android-%d", manifest.Settings.API), "google_apis", "x86_64")
+	tag := "google_apis"
+	if manifest.Settings.ImageTag != "" {
+		tag = manifest.Settings.ImageTag
+	}
+	imagePath := filepath.Join("system-images", fmt.Sprintf("android-%d", manifest.Settings.API), tag, "x86_64")
 	if !exists(filepath.Join(m.SDK, imagePath, "system.img")) {
-		return fmt.Errorf("目标缺少 Android %d google_apis x86_64 系统镜像", manifest.Settings.API)
+		return fmt.Errorf("目标缺少 Android %d %s x86_64 系统镜像", manifest.Settings.API, tag)
 	}
 	props, err := parseINI(filepath.Join(m.SDK, imagePath, "build.prop"))
 	if err != nil {
@@ -885,7 +918,7 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		return err
 	}
 	s := manifest.Settings
-	config := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\ntag.id=google_apis\ntag.display=Google APIs\nhw.cpu.arch=x86_64\nhw.cpu.ncore=%d\nhw.ramSize=%d\nhw.lcd.width=%d\nhw.lcd.height=%d\nhw.lcd.density=%d\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=%s\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator, s.Cores, s.RAM, s.Width, s.Height, s.Density, s.DataSize)
+	config := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\n%s\nhw.cpu.arch=x86_64\nhw.cpu.ncore=%d\nhw.ramSize=%d\nhw.lcd.width=%d\nhw.lcd.height=%d\nhw.lcd.density=%d\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=%s\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator, imageTagConfig(tag), s.Cores, s.RAM, s.Width, s.Height, s.Density, s.DataSize)
 	if err = writeNew(filepath.Join(stage, "config.ini"), config); err != nil {
 		return err
 	}

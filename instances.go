@@ -32,6 +32,12 @@ func (a *app) selectedStatus() string {
 			if item.API != 0 {
 				prefix = fmt.Sprintf("Android API %d · ", item.API)
 			}
+			switch item.ImageTag {
+			case "google_apis_playstore":
+				prefix += "Google Play 镜像 · "
+			case "google_apis":
+				prefix += "Google APIs 镜像（默认不含 Play 商店） · "
+			}
 			switch item.State {
 			case "not_created":
 				return prefix + "上次检查：实例尚未创建"

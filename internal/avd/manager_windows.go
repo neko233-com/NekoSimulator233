@@ -84,6 +84,13 @@ func writeNew(path, contents string) error {
 	return closeErr
 }
 
+func imageTagConfig(tag string) string {
+	if tag == "google_apis_playstore" {
+		return "tag.id=google_apis_playstore\ntag.display=Google Play\nPlayStore.enabled=true"
+	}
+	return "tag.id=google_apis\ntag.display=Google APIs"
+}
+
 // Ensure creates only our own AVD metadata. Existing data and configuration
 // are never overwritten or reset.
 func (m Manager) Ensure() error {
@@ -107,29 +114,41 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 	ini := filepath.Join(home, m.Name+".ini")
 	config := filepath.Join(dir, "config.ini")
 	if exists(ini) && exists(config) {
-		_, err := ownedAVD(m)
+		if _, err := ownedAVD(m); err != nil {
+			return err
+		}
+		values, err := parseINI(config)
+		if err != nil {
+			return err
+		}
+		_, _, err = systemImageIdentity(values)
 		return err
 	}
 	if exists(ini) || exists(config) {
 		return errors.New("实例配置不完整，已保留现有数据；请检查 AVD 目录")
 	}
-	var imagePath, api string
+	var imagePath, api, imageTag string
 	levels := []string{"35", "34"}
 	if requestedAPI != 0 {
 		levels = []string{strconv.Itoa(requestedAPI)}
 	}
-	for _, level := range levels {
-		p := filepath.Join("system-images", "android-"+level, "google_apis", "x86_64")
-		if exists(filepath.Join(m.SDK, p, "system.img")) {
-			imagePath, api = p, level
+	for _, tag := range []string{"google_apis_playstore", "google_apis"} {
+		for _, level := range levels {
+			p := filepath.Join("system-images", "android-"+level, tag, "x86_64")
+			if exists(filepath.Join(m.SDK, p, "system.img")) {
+				imagePath, api, imageTag = p, level, tag
+				break
+			}
+		}
+		if imagePath != "" {
 			break
 		}
 	}
 	if imagePath == "" {
 		if requestedAPI != 0 {
-			return fmt.Errorf("缺少 Android %d google_apis x86_64 系统镜像；请使用 SDK Manager 安装 system-images;android-%d;google_apis;x86_64", requestedAPI, requestedAPI)
+			return fmt.Errorf("缺少 Android %d Google Play 或 Google APIs x86_64 系统镜像；请使用 SDK Manager 安装 system-images;android-%d;google_apis_playstore;x86_64", requestedAPI, requestedAPI)
 		}
-		return errors.New("缺少 Android 34 或 35 的 google_apis x86_64 系统镜像")
+		return errors.New("缺少 Android 34 或 35 的 Google Play 或 Google APIs x86_64 系统镜像")
 	}
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return err
@@ -143,7 +162,7 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 		}
 		return err
 	}
-	settings := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\ntag.id=google_apis\ntag.display=Google APIs\nhw.cpu.arch=x86_64\nhw.cpu.ncore=4\nhw.ramSize=2048\nhw.lcd.width=720\nhw.lcd.height=1280\nhw.lcd.density=240\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=6G\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator)
+	settings := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\n%s\nhw.cpu.arch=x86_64\nhw.cpu.ncore=4\nhw.ramSize=2048\nhw.lcd.width=720\nhw.lcd.height=1280\nhw.lcd.density=240\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=6G\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator, imageTagConfig(imageTag))
 	if err := writeNew(config, settings); err != nil {
 		return fmt.Errorf("创建实例配置失败：%w", err)
 	}

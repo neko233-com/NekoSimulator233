@@ -122,6 +122,9 @@ func rewriteKeymapArchive(t *testing.T, source, destination, mode string) {
 				m.Format = 2
 				m.Keymaps = nil
 			}
+			if mode == "play-as-v3" {
+				m.Format = 3
+			}
 			if mode == "checksum" {
 				m.Keymaps[0].SHA256 = strings.Repeat("0", 64)
 			}
