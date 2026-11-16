@@ -626,15 +626,44 @@ func (m Manager) LaunchApp(ctx context.Context, instance Instance, name string) 
 // InstallAPK uses the SDK adb client directly; the local path is not sent to a
 // shell. Replacement is opt-in so an installed package is not silently updated.
 func (m Manager) InstallAPK(ctx context.Context, instance Instance, path string, replace bool) error {
-	full, err := filepath.Abs(path)
-	if err != nil {
-		return errors.New("APK 路径无效")
+	return m.InstallAPKs(ctx, instance, []string{path}, replace)
+}
+
+// InstallAPKs installs one APK or a set of split APKs as one package-manager
+// transaction. The lifecycle lock keeps the selected ADB target stable.
+func (m Manager) InstallAPKs(ctx context.Context, instance Instance, paths []string, replace bool) error {
+	return m.withCurrentInstanceGuard(ctx, instance, func(ctx context.Context, current Instance) error {
+		return m.installAPKsUnchecked(ctx, current, paths, replace)
+	})
+}
+
+// The caller must hold the instance lifecycle lock and have verified identity.
+func (m Manager) installAPKsUnchecked(ctx context.Context, instance Instance, paths []string, replace bool) error {
+	if len(paths) == 0 {
+		return errors.New("请选择至少一个 APK 文件")
 	}
-	info, err := os.Stat(full)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || !strings.EqualFold(filepath.Ext(full), ".apk") {
-		return errors.New("APK 文件不存在或无效")
+	fullPaths := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		full, err := filepath.Abs(path)
+		if err != nil {
+			return errors.New("APK 路径无效")
+		}
+		info, err := os.Stat(full)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || !strings.EqualFold(filepath.Ext(full), ".apk") {
+			return errors.New("APK 文件不存在或无效")
+		}
+		key := strings.ToLower(filepath.Clean(full))
+		if seen[key] {
+			return errors.New("不能重复选择同一个 APK 文件")
+		}
+		seen[key] = true
+		fullPaths = append(fullPaths, full)
 	}
 	args := []string{"install"}
+	if len(fullPaths) > 1 {
+		args[0] = "install-multiple"
+	}
 	if replace {
 		args = append(args, "-r")
 	} else {
@@ -642,13 +671,23 @@ func (m Manager) InstallAPK(ctx context.Context, instance Instance, path string,
 		// the no-replacement policy atomic even across concurrent installs.
 		args = append(args, "-R")
 	}
-	args = append(args, full)
+	args = append(args, fullPaths...)
 	out, err := m.adb(ctx, instance.Serial, args...)
 	if err != nil {
 		return apkInstallError(out, err)
 	}
-	if !strings.Contains(string(out), "Success") {
-		return errors.New("APK 安装未返回成功状态")
+	success := false
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Failure") || strings.HasPrefix(line, "Error") {
+			return apkInstallError(out, errors.New("Android 包管理器报告安装失败"))
+		}
+		if line == "Success" {
+			success = true
+		}
+	}
+	if !success {
+		return apkInstallError(out, errors.New("Android 包管理器未报告安装成功"))
 	}
 	return nil
 }

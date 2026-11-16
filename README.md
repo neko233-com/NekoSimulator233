@@ -12,7 +12,7 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 主窗口的“资源设置…”可调整独立实例的虚拟 CPU 核数和 Android 客户机内存；关闭独立实例后保存，下次启动生效。新实例默认 4 核、2048 MiB；已有实例沿用当前配置，直到主动保存新设置。设置保存在实例目录中，不修改其 Android 数据盘；项目的 `.nekobak` 备份会保留这些值。客户机内存设置不等于宿主实际内存占用，过低可能导致应用运行不稳定。
 
-独立实例启动后，可在主窗口选择“安装 APK…”安装本地 APK；已有同名应用时安装会拒绝覆盖。需要升级已有应用时使用“更新 APK…”，Android 仍会检查包签名和版本。安装结果显示在主窗口，不影响 MuMu 实例。
+独立实例启动后，可在主窗口选择“安装 APK…”安装本地 APK；已有同名应用时安装会拒绝覆盖。需要升级已有应用时使用“更新 APK…”，Android 仍会检查包签名和版本。分包应用可以同时选择属于同一应用的基础 APK 和各个 split APK，一次提交给 Android 安装；`.apks`、`.xapk` 压缩包需要先自行解包。安装结果显示在主窗口，操作针对当前选中的独立实例。
 
 微信和抖音不默认安装。独立实例启动后，可通过主窗口中的对应官方下载按钮在 Android 浏览器打开官方页面，再由用户完成下载和安装；也可使用 Agent 工具 `neko_open_optional_app_download`，参数 `app` 为 `wechat` 或 `douyin`。打开页面不代表下载、安装或应用兼容性验证成功。
 
@@ -53,7 +53,7 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 ## Agent 控制
 
-安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_test_vulkan_guest_frame`、`neko_mumu_migration_preflight`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。`neko_host_vulkan` 查询 Windows 宿主，`neko_mumu_migration_preflight` 只读查询指定 MuMu 实例及本机 SDK 镜像文件；其余实例操作面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
+安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_test_vulkan_guest_frame`、`neko_mumu_migration_preflight`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_install_apks`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。`neko_install_apks` 使用 `paths` 一次接收同一应用的多个 APK；需要替换已安装应用时显式设置 `replace: true`。`neko_host_vulkan` 查询 Windows 宿主，`neko_mumu_migration_preflight` 只读查询指定 MuMu 实例及本机 SDK 镜像文件；其余实例操作面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
 `neko_test_vulkan_guest_frame` 对已运行的所选独立实例截图，通过内存管道交给隔离子进程，在隐藏 Vulkan 窗口上传并回读比对；仅返回设备和验证结果，不返回或保存截图。可同时传入目标 `width` 和 `height`，测试保持比例、黑边填充的 CPU 最近邻缩放；未指定时使用原始尺寸。它不会启动实例。该诊断会分配画面和 GPU 资源，尚未完成真实实例端到端验证，不代表可见窗口已经接入 Vulkan 或证明游戏性能。
 

@@ -81,7 +81,7 @@ func TestTapTapInstallRejectsInvalidOrIncompletePackage(t *testing.T) {
 
 func TestTapTapInstallRejectsReusedInstanceEndpoint(t *testing.T) {
 	a := Instance{Name: "Alpha", Serial: "emulator-5554", port: 8554, pid: 42, token: "original"}
-	if !sameTapTapInstance(a, a) {
+	if !sameInstance(a, a) {
 		t.Fatal("same running instance rejected")
 	}
 	for _, b := range []Instance{
@@ -90,7 +90,7 @@ func TestTapTapInstallRejectsReusedInstanceEndpoint(t *testing.T) {
 		{Name: "Alpha", Serial: "emulator-5556", port: a.port, pid: a.pid, token: a.token},
 		{},
 	} {
-		if sameTapTapInstance(a, b) {
+		if sameInstance(a, b) {
 			t.Fatal("changed process or endpoint accepted")
 		}
 	}
@@ -100,11 +100,14 @@ func TestTapTapInstallDoesNotRunWhenInstanceIsGone(t *testing.T) {
 	m := backupFixture(t)
 	original := Instance{Name: m.Name, Serial: "emulator-5554", port: 8554, pid: 42, token: "synthetic"}
 	called := false
-	err := m.withTapTapInstance(context.Background(), original, func(context.Context, Instance) error {
+	err := m.withCurrentInstance(context.Background(), original, func(context.Context, Instance) error {
 		called = true
 		return nil
 	})
 	if err == nil || called {
 		t.Fatal("operation was allowed without the matching live instance")
+	}
+	if err := m.InstallAPKs(context.Background(), original, []string{"does-not-matter.apk"}, false); err == nil {
+		t.Fatal("APK installation accepted a stale instance")
 	}
 }

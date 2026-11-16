@@ -107,6 +107,10 @@ type InstallAPK struct {
 	Path    string `json:"path" jsonschema:"Absolute path to a local APK file"`
 	Replace bool   `json:"replace,omitempty" jsonschema:"Allow replacing an already-installed package"`
 }
+type InstallAPKs struct {
+	Paths   []string `json:"paths" jsonschema:"Local APK files belonging to the same split package"`
+	Replace bool     `json:"replace,omitempty" jsonschema:"Allow replacing an already-installed package"`
+}
 type Result struct {
 	OK bool `json:"ok"`
 }
@@ -182,6 +186,7 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, ro("neko_apps", "List installed third-party package names in the Neko-owned instance."), s.apps)
 	mcp.AddTool(server, rw("neko_launch_app", "Launch an installed application by package name in the Neko-owned instance."), s.launch)
 	mcp.AddTool(server, rw("neko_install_apk", "Install a local APK into the Neko-owned instance. Replacing an existing package requires replace=true."), s.install)
+	mcp.AddTool(server, rw("neko_install_apks", "Install split APK files atomically into the selected instance. Replacing an existing package requires replace=true."), s.installMultiple)
 	mcp.AddTool(server, rw("neko_install_taptap", "Download the official TapTap Android APK and install it in the selected running instance without replacing an installed copy; requires SDK Build Tools and network access."), s.installTapTap)
 	mcp.AddTool(server, ro("neko_taptap_setup_status", "Inspect the selected instance's first-run TapTap setup state; it does not query whether the app is currently installed."), s.tapTapSetupStatus)
 	mcp.AddTool(server, rw("neko_open_optional_app_download", "Open the official WeChat or Douyin download page in the selected running Android instance. Does not download or install the app; the guest browser may access the network."), s.openOptionalAppDownload)
@@ -685,6 +690,19 @@ func (s *Service) install(ctx context.Context, _ *mcp.CallToolRequest, p Install
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	err = m.InstallAPK(ctx, i, p.Path, p.Replace)
+	return nil, Result{OK: err == nil}, err
+}
+
+func (s *Service) installMultiple(ctx context.Context, _ *mcp.CallToolRequest, p InstallAPKs) (*mcp.CallToolResult, Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, i, err := s.ready(ctx)
+	if err != nil {
+		return nil, Result{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	err = m.InstallAPKs(ctx, i, p.Paths, p.Replace)
 	return nil, Result{OK: err == nil}, err
 }
 

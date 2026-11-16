@@ -154,7 +154,7 @@ func (a *app) chooseAPK(replace bool) {
 	name := a.selectedName()
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-			Parent: parent, Title: "选择 Android APK", Filters: []mygo.FileFilter{{Name: "Android APK", Extensions: []string{"apk"}}},
+			Parent: parent, Title: "选择 Android APK（分包可多选）", Multiple: true, Filters: []mygo.FileFilter{{Name: "Android APK", Extensions: []string{"apk"}}},
 		})
 		if err == nil && len(paths) != 0 {
 			parent.Update(func() { a.message = "正在安装 APK，请稍候…" })
@@ -167,7 +167,7 @@ func (a *app) chooseAPK(replace bool) {
 				err = readyErr
 				if err == nil {
 					ctx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
-					err = manager.InstallAPK(ctx, instance, paths[0], replace)
+					err = manager.InstallAPKs(ctx, instance, paths, replace)
 					cancel()
 				}
 			}

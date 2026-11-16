@@ -104,11 +104,17 @@ func TestInstallAPKUsesExplicitReplacementAndReportsFailure(t *testing.T) {
 	}
 	m := Manager{SDK: root}
 	instance := Instance{Serial: "emulator-5554"}
+	split := filepath.Join(root, "split config.apk")
+	if err := os.WriteFile(split, []byte("test split"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
-		replace bool
-		flag    string
-	}{{false, "-R"}, {true, "-r"}} {
-		if err := m.InstallAPK(context.Background(), instance, apk, tc.replace); err != nil {
+		replace       bool
+		flag, command string
+		paths         []string
+	}{{false, "-R", "install", []string{apk}}, {true, "-r", "install", []string{apk}},
+		{false, "-R", "install-multiple", []string{apk, split}}, {true, "-r", "install-multiple", []string{apk, split}}} {
+		if err := m.installAPKsUnchecked(context.Background(), instance, tc.paths, tc.replace); err != nil {
 			t.Fatal(err)
 		}
 		data, err := os.ReadFile(record)
@@ -119,13 +125,27 @@ func TestInstallAPKUsesExplicitReplacementAndReportsFailure(t *testing.T) {
 		if err := json.Unmarshal(data, &args); err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{"-s", instance.Serial, "install", tc.flag, apk}; !slices.Equal(args, want) {
+		if want := append([]string{"-s", instance.Serial, tc.command, tc.flag}, tc.paths...); !slices.Equal(args, want) {
 			t.Fatalf("adb args %q, want %q", args, want)
 		}
 	}
 	t.Setenv("NEKO_TEST_FAKE_ADB_FAILURE", "1")
-	if err := m.InstallAPK(context.Background(), instance, apk, true); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+	if err := m.installAPKsUnchecked(context.Background(), instance, []string{apk}, true); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
 		t.Fatalf("missing Android package manager failure: %v", err)
+	}
+	t.Setenv("NEKO_TEST_FAKE_ADB_FAILURE", "")
+	t.Setenv("NEKO_TEST_FAKE_ADB_INTENT", "Failure [INSTALL_FAILED_MISSING_SPLIT]")
+	if err := m.installAPKsUnchecked(context.Background(), instance, []string{apk, split}, false); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_MISSING_SPLIT") {
+		t.Fatalf("missing Android package manager failure on successful process exit: %v", err)
+	}
+	t.Setenv("NEKO_TEST_FAKE_ADB_INTENT", "Success\nFailure [INSTALL_FAILED_MISSING_SPLIT]")
+	if err := m.installAPKsUnchecked(context.Background(), instance, []string{apk, split}, false); err == nil {
+		t.Fatal("failure following success was accepted")
+	}
+	for _, paths := range [][]string{nil, {apk, apk}, {apk, filepath.Join(root, "missing.apk")}} {
+		if err := m.installAPKsUnchecked(context.Background(), instance, paths, false); err == nil {
+			t.Fatalf("invalid APK selection accepted: %q", paths)
+		}
 	}
 }
 
