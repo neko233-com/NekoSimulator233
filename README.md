@@ -1,20 +1,36 @@
 # NekoSimulator233
 
-Windows 上的 MuMu 实例管理原型，使用 Go 1.27 和 MyGo 原生 UI。当前依赖本机已安装的 MuMu 引擎，不包含模拟器内核。
+Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模式调用本机 Android SDK Emulator、系统镜像和 Windows 虚拟化；兼容模式连接本机 MuMu，不包含或复制其引擎。
 
-启动 MuMu 后运行程序，或将 `NEKO_MUMU_ROOT` 指向 MuMu 安装目录。界面可查询实例并启动或显示实例。显示实例时仍会使用 MuMu 自身窗口，该窗口的广告尚未移除。
+独立模式需要 Android SDK 的 `emulator`、`platform-tools` 和 Android 34 或 35 `google_apis/x86_64` 系统镜像，以及可用的硬件 Vulkan GPU 和虚拟化。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，窗口最小化或隐藏时暂停采集，失焦时释放按住的输入。
+
+独立实例窗口的“编辑键位”可将画面位置绑定到键盘：点击画面位置，再按对应按键；“删除键位”选择后按要删除的键。编辑界面也可选择“设置 WASD 摇杆”，点击游戏摇杆中心，再用缩小或放大按钮调整半径；编辑时画面显示键位和摇杆范围，“完成键位”退出编辑。WASD 已有单点绑定时需先删除这些绑定。绑定位置按画面比例保存到 `%LOCALAPPDATA%/NekoSimulator233-data/keymap.json`，其他未绑定按键仍直通 Android。摇杆占用一个触点，可与鼠标和其他绑定键同时使用；失焦或画面尺寸变化时释放输入。当前所有独立实例共用一份键位配置，尚无按键组合或按游戏切换方案。GUI 与 Agent 对同一实例的触屏手势互斥，忙时会返回具体原因。
+
+兼容模式：启动 MuMu 后运行程序，或将 `NEKO_MUMU_ROOT` 指向 MuMu 安装目录。已启动的 MuMu 实例可在自己的画面窗口打开；停止的实例先由 MuMu 启动，待 Android 启动后刷新。兼容模式的图形后端由 MuMu 配置决定。
 
 ## 构建与安装
 
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.0
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.0-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.10
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.10-x64.msi
 ```
 
-MSI 按当前用户安装。首次安装和升级都使用完整 MSI；目前自动检查、下载和安装更新尚未实现，也没有配置更新源。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
+MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
+
+```powershell
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.11-x64.msi -Version 0.1.11
+```
+
+安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
+
+## Agent 控制
+
+安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_status`、`neko_start`、`neko_stop`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app` 和 `neko_ui_hierarchy`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
+
+`neko_text` 支持可打印 ASCII 和 UTF-8；非 ASCII 输入会临时替换 Android 实例的剪贴板，若其间没有其他修改则恢复之前的纯文本。非文本剪贴板内容无法通过当前接口恢复。`neko_multi_swipe` 支持 2 至 10 指沿直线同步滑动；`neko_joystick` 允许按顺序保持多个方向，单次总时长不超过 20 秒。取消请求时会释放触点；尚未覆盖所有复杂游戏输入。启动和关闭独立实例通过文件锁协调 GUI 与 MCP 进程。
 
 ## 当前限制
 
-这是早期原型，尚未实现 MuMu 功能对等、广告移除、模拟器升级迁移、自动更新和性能目标。请勿用于替代现有实例的备份。
+这是早期原型：独立模式使用 Android SDK Emulator，而非自主实现的虚拟化内核；其 Android Vulkan 命令已在测试实例上执行并回读验证，MyGo 窗口的宿主绘制仍使用 MyGo 的 Windows 渲染后端。兼容模式的启动器和 Android 内部仍由 MuMu 控制，并未全面去除 MuMu 广告；兼容模式的键盘转发尚未在真实 MuMu 游戏中验证。尚未实现 MuMu 使用习惯与功能对等、复杂游戏键位、音频验证、MuMu 数据迁移、远程更新或游戏性能验收。请勿用于替代现有实例的备份。
