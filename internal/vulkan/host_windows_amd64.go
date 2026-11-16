@@ -397,7 +397,7 @@ func ProbeFittedFrame(frame *image.RGBA, width, height int) (DeviceInfo, error) 
 	return probeFrame(frame, width, height, true, false)
 }
 
-// ProbeGPUScaledFrame verifies the experimental integer GPU scale path.
+// ProbeGPUScaledFrame verifies the experimental GPU scale path when selected.
 func ProbeGPUScaledFrame(frame *image.RGBA, width, height int) (DeviceInfo, error) {
 	if frame == nil || width <= 0 || height <= 0 || width > 8192 || height > 8192 || int64(width)*int64(height) > 32*1024*1024 {
 		return DeviceInfo{}, errors.New("画面尺寸无效")

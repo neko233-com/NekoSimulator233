@@ -10,6 +10,7 @@ type Event struct {
 	Height      int    `json:"height,omitempty"`
 	FrameWidth  int    `json:"frame_width,omitempty"`
 	FrameHeight int    `json:"frame_height,omitempty"`
+	GPUScaled   bool   `json:"gpu_scaled,omitempty"`
 	Usage       uint16 `json:"usage,omitempty"`
 }
 
@@ -26,8 +27,8 @@ func (e Event) Valid() bool {
 	return e.Width > 0 && e.Height > 0 && e.Width <= 8192 && e.Height <= 8192 && e.Width*e.Height <= 32*1024*1024 && e.FrameWidth > 0 && e.FrameHeight > 0 && e.FrameWidth <= 8192 && e.FrameHeight <= 8192 && e.FrameWidth*e.FrameHeight <= 32*1024*1024 && e.X >= -32768 && e.X <= 32767 && e.Y >= -32768 && e.Y <= 32767
 }
 
-// Point matches the integer contain geometry and nearest-neighbor source
-// selection used by the Vulkan staging path. Drags clamp to the picture.
+// Point matches the contain geometry and the active renderer's nearest
+// sample convention. Drags clamp to the picture.
 func (e Event) Point(clamp bool) (int, int, bool) {
 	if !e.Valid() || (e.Kind != "down" && e.Kind != "move") {
 		return 0, 0, false
@@ -45,5 +46,8 @@ func (e Event) Point(clamp bool) (int, int, bool) {
 		return 0, 0, false
 	}
 	x, y = max(0, min(fw-1, x)), max(0, min(fh-1, y))
+	if e.GPUScaled {
+		return (2*x + 1) * sw / (2 * fw), (2*y + 1) * sh / (2 * fh), true
+	}
 	return x * sw / fw, y * sh / fh, true
 }

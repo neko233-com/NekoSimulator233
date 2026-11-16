@@ -67,7 +67,7 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 源码目录中还可用 `go run ./cmd/vulkan-host-probe -letterbox` 在隔离进程和 64×64 隐藏窗口中回读验证 GPU 黑边路径；该命令会初始化宿主 Vulkan 设备，但不会连接或启动模拟器。
 
-可另外设置 `NEKO_EXPERIMENTAL_VULKAN_GPU_SCALE=1`，让实验性 Vulkan 窗口在支持的颜色格式及整数倍放大场景尝试由 GPU 缩放；其他比例和不支持的格式仍使用 CPU 路径，以保持现有输入坐标映射。可运行 `go run ./cmd/vulkan-host-probe -gpu-scale` 在独立进程中执行 32×32 到 64×64 的 GPU 回读诊断；如果没有实际进入 GPU 缩放路径，命令会报告失败。该功能尚未完成真实 GPU、窗口交互及游戏性能验证。
+可另外设置 `NEKO_EXPERIMENTAL_VULKAN_GPU_SCALE=1`，让实验性 Vulkan 窗口在支持的颜色格式和采样位置远离像素边界时尝试 GPU 缩放，覆盖部分非整数比例及缩小场景；其他情况回退 CPU。输入坐标根据实际呈现路径换算。可在独立进程运行 `go run ./cmd/vulkan-host-probe -gpu-scale` 验证整数倍缩放，或使用 `-gpu-scale-fractional` 验证非整数比例；如果没有实际进入 GPU 路径，命令会报告失败。该功能尚未完成真实 GPU、窗口交互及游戏性能验证。
 
 实验 Vulkan 窗口呈现器能在窗口尺寸变化或交换链失效时重建资源；GPU 仍在使用资源时会保留资源并报告忙碌。该恢复路径已通过模拟驱动测试，尚未完成真实窗口缩放、最小化和 GPU 故障测试。
 

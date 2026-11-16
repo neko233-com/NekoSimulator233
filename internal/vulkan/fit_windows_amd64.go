@@ -14,6 +14,7 @@ type fitPlan struct {
 	left, top, fw, fh int
 	xOffsets          []int
 	black             []byte
+	gpuScaleStable    bool
 }
 
 func newFitPlan(sw, sh int, extent extent2D) (*fitPlan, error) {
@@ -31,6 +32,7 @@ func newFitPlan(sw, sh int, extent extent2D) (*fitPlan, error) {
 		p.fw = max(1, h*sw/sh)
 	}
 	p.left, p.top = (w-p.fw)/2, (h-p.fh)/2
+	p.gpuScaleStable = (p.fw != p.sw || p.fh != p.sh) && stableBlitAxis(p.sw, p.fw) && stableBlitAxis(p.sh, p.fh)
 	p.xOffsets = make([]int, p.fw)
 	for x := range p.xOffsets {
 		p.xOffsets[x] = x * sw / p.fw * 4
@@ -50,13 +52,25 @@ func (p *fitPlan) unscaledLetterbox() bool {
 	return p != nil && p.fw == p.sw && p.fh == p.sh && (p.w != p.sw || p.h != p.sh)
 }
 
-// Integer upscaling samples the same source pixel with both Vulkan's
-// pixel-center nearest filter and the existing input-coordinate mapping.
-func (p *fitPlan) integerUpscale() bool {
-	if p == nil || p.fw <= p.sw || p.fh <= p.sh || p.fw%p.sw != 0 || p.fh%p.sh != 0 {
+// Reject samples too close to a source-texel boundary. Vulkan permits
+// coordinate rounding; the conservative margin avoids ambiguous ties on
+// implementations with the core minimum of four subtexel precision bits.
+func stableBlitAxis(src, dst int) bool {
+	if src <= 0 || dst <= 0 {
 		return false
 	}
-	return p.fw/p.sw == p.fh/p.sh
+	den := int64(2 * dst)
+	for x := 0; x < dst; x++ {
+		remainder := (int64(2*x+1) * int64(src)) % den
+		if min(remainder, den-remainder)*16 <= den {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *fitPlan) stableGPUScale() bool {
+	return p != nil && p.gpuScaleStable
 }
 
 // Called with the host lock held, as part of validating a submission.

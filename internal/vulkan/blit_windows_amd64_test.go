@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 	"golang.org/x/sys/windows"
 )
 
@@ -31,7 +32,7 @@ func TestIntegerGPUScalingMatchesInputMapping(t *testing.T) {
 		for sh := 1; sh <= 12; sh++ {
 			for scale := 2; scale <= 5; scale++ {
 				plan, err := newFitPlan(sw, sh, extent2D{uint32(sw*scale + 2), uint32(sh * scale)})
-				if err != nil || !plan.integerUpscale() {
+				if err != nil || !plan.stableGPUScale() {
 					t.Fatalf("incorrect integer scaling plan: %+v %v", plan, err)
 				}
 				for x := 0; x < plan.fw; x++ {
@@ -47,9 +48,9 @@ func TestIntegerGPUScalingMatchesInputMapping(t *testing.T) {
 			}
 		}
 	}
-	for _, dims := range [][4]int{{2, 2, 2, 2}, {4, 4, 2, 2}, {4, 4, 6, 6}, {3, 4, 7, 7}} {
+	for _, dims := range [][4]int{{2, 2, 2, 2}, {4, 4, 2, 2}, {4, 4, 6, 6}, {4, 4, 5, 5}} {
 		plan, err := newFitPlan(dims[0], dims[1], extent2D{uint32(dims[2]), uint32(dims[3])})
-		if err != nil || plan.integerUpscale() {
+		if err != nil || plan.stableGPUScale() {
 			t.Fatalf("unexpected GPU scaling for %v", dims)
 		}
 	}
@@ -81,7 +82,7 @@ func TestBlitFormatAndMemorySelection(t *testing.T) {
 
 func TestRecordScaledFrameUsesOrderedBarriersAndOffsets(t *testing.T) {
 	plan, err := newFitPlan(2, 2, extent2D{6, 4})
-	if err != nil || !plan.integerUpscale() {
+	if err != nil || !plan.stableGPUScale() {
 		t.Fatal("invalid plan")
 	}
 	var sequence []string
@@ -117,6 +118,60 @@ func TestRecordScaledFrameUsesOrderedBarriersAndOffsets(t *testing.T) {
 	}
 	if blit.SrcOffsets[1] != (offset3D{2, 2, 1}) || blit.DstOffsets[0] != (offset3D{1, 0, 0}) || blit.DstOffsets[1] != (offset3D{5, 4, 1}) {
 		t.Fatalf("blit geometry %+v", blit)
+	}
+}
+
+func TestGPUScaleAllowsUnambiguousNonIntegerRatios(t *testing.T) {
+	for _, dims := range [][4]int{{3, 3, 5, 5}, {3, 3, 2, 2}, {5, 5, 6, 6}} {
+		plan, err := newFitPlan(dims[0], dims[1], extent2D{uint32(dims[2]), uint32(dims[3])})
+		if err != nil || !plan.stableGPUScale() {
+			t.Fatalf("safe ratio rejected %v: %v", dims, err)
+		}
+		frame := image.NewRGBA(image.Rect(0, 0, dims[0], dims[1]))
+		for y := 0; y < dims[1]; y++ {
+			for x := 0; x < dims[0]; x++ {
+				i := y*frame.Stride + x*4
+				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+3] = byte(x+1), byte(y+1), 255
+			}
+		}
+		pixels := make([]byte, dims[2]*dims[3]*4)
+		if err := fittedFrameSample(pixels, frame, extent2D{uint32(dims[2]), uint32(dims[3])}, vkFormatRGBA8, false, true); err != nil {
+			t.Fatal(err)
+		}
+		for y := 0; y < dims[3]; y++ {
+			for x := 0; x < dims[2]; x++ {
+				e := previewinput.Event{Kind: "down", X: x, Y: y, Width: dims[2], Height: dims[3], FrameWidth: dims[0], FrameHeight: dims[1], GPUScaled: true}
+				sx, sy, ok := e.Point(false)
+				i := (y*dims[2] + x) * 4
+				if !ok || pixels[i] != byte(sx+1) || pixels[i+1] != byte(sy+1) {
+					t.Fatalf("point %d,%d does not match rendered pixel", x, y)
+				}
+			}
+		}
+	}
+	for _, dims := range [][2]int{{4, 2}, {4, 5}, {720, 1080}} {
+		if stableBlitAxis(dims[0], dims[1]) {
+			t.Fatalf("ambiguous ratio accepted: %v", dims)
+		}
+	}
+}
+
+func TestFractionalGPUSelectionAndAmbiguousFallback(t *testing.T) {
+	h := &Host{device: 1, physical: 2, info: DeviceInfo{PresentFence: true}}
+	procs := blitProcs{formatProperties: windows.NewCallback(func(_, _ uintptr, props *formatProperties) uintptr {
+		props.Optimal = vkFormatBlitSrc | vkFormatBlitDst
+		return 0
+	})}
+	for _, tc := range []struct {
+		source, target int
+		want           bool
+	}{{3, 5, true}, {4, 5, false}, {3, 2, true}} {
+		s := &Swapchain{host: h, swapchain: 1, extent: extent2D{uint32(tc.target), uint32(tc.target)}, format: surfaceFormat{Format: vkFormatRGBA8}}
+		used := false
+		hooks := s.frameRGBAHooksMode(image.NewRGBA(image.Rect(0, 0, tc.source, tc.source)), false, true, true, &used, nil, func(*Host) (blitProcs, error) { return procs, nil })
+		if err := hooks.validate(h); err != nil || used != tc.want {
+			t.Fatalf("%d -> %d: used=%v err=%v", tc.source, tc.target, used, err)
+		}
 	}
 }
 

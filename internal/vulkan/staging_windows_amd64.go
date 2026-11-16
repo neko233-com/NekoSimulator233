@@ -259,6 +259,10 @@ func validateFrame(frame *image.RGBA) (int, error) {
 // the mapped staging buffer, including opaque black bars. No extra full-size
 // CPU image is allocated. GPU scaling is a future optimization.
 func fittedFrame(dst []byte, frame *image.RGBA, extent extent2D, format uint32, compare bool) error {
+	return fittedFrameSample(dst, frame, extent, format, compare, false)
+}
+
+func fittedFrameSample(dst []byte, frame *image.RGBA, extent extent2D, format uint32, compare, centered bool) error {
 	if _, err := validateFrame(frame); err != nil {
 		return err
 	}
@@ -290,6 +294,9 @@ func fittedFrame(dst []byte, frame *image.RGBA, extent extent2D, format uint32, 
 			var r, g, b, a byte = 0, 0, 0, 255
 			if x >= left && x < left+fw && y >= top && y < top+fh {
 				sx, sy := (x-left)*sw/fw, (y-top)*sh/fh
+				if centered {
+					sx, sy = (2*(x-left)+1)*sw/(2*fw), (2*(y-top)+1)*sh/(2*fh)
+				}
 				i := int(sy)*frame.Stride + int(sx)*4
 				r, g, b, a = frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3]
 				if bgra {
@@ -353,8 +360,8 @@ func (s *Swapchain) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
 	return s.presentRGBA(frame, verify, true)
 }
 
-// PresentFittedGPU attempts GPU scaling only for exact integer upscales.
-// Unsupported formats and other scale ratios use the established CPU path.
+// PresentFittedGPU attempts GPU scaling when sampling avoids texel boundaries.
+// Unsupported formats and ambiguous ratios use the established CPU path.
 func (s *Swapchain) PresentFittedGPU(frame *image.RGBA, verify bool) error {
 	return s.presentRGBAWithGPU(frame, verify, true, true)
 }
@@ -379,7 +386,7 @@ func (s *Swapchain) frameRGBAHooksMode(frame *image.RGBA, verify, fit, wantGPU b
 	pack := func(data []byte, compare bool) error {
 		if fit {
 			if compare {
-				return fittedFrame(data, frame, s.extent, s.format.Format, true)
+				return fittedFrameSample(data, frame, s.extent, s.format.Format, true, gpuScale)
 			}
 			if directLetterbox || gpuScale {
 				return frameBytes(data, frame, s.format.Format, false)
@@ -408,7 +415,7 @@ func (s *Swapchain) frameRGBAHooksMode(frame *image.RGBA, verify, fit, wantGPU b
 						size = sourceSize
 					}
 				}
-				if err == nil && wantGPU && s.fit.integerUpscale() && (s.format.Format == vkFormatRGBA8 || s.format.Format == vkFormatBGRA8) {
+				if err == nil && wantGPU && s.fit.stableGPUScale() && (s.format.Format == vkFormatRGBA8 || s.format.Format == vkFormatBGRA8) {
 					if !s.blitChecked {
 						p, resolveErr := resolveBlit(host)
 						s.blitChecked = true

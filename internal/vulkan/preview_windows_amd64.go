@@ -72,6 +72,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 		}
 	}
 	var displayedWidth, displayedHeight, frameWidth, frameHeight int
+	var displayedGPUScaled bool
 	var visibility previewVisibility
 	emitVisibility := func(next bool) {
 		if !visibility.change(next) {
@@ -133,7 +134,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 			if msg == 0x0201 {
 				kind = "down"
 			}
-			e := previewinput.Event{Kind: kind, X: int(int16(lp & 0xffff)), Y: int(int16((lp >> 16) & 0xffff)), Width: w, Height: h, FrameWidth: frameWidth, FrameHeight: frameHeight}
+			e := previewinput.Event{Kind: kind, X: int(int16(lp & 0xffff)), Y: int(int16((lp >> 16) & 0xffff)), Width: w, Height: h, FrameWidth: frameWidth, FrameHeight: frameHeight, GPUScaled: displayedGPUScaled}
 			if e.Valid() {
 				if kind == "down" {
 					setCapture.Call(hwnd)
@@ -270,6 +271,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				}
 				displayedWidth, displayedHeight = int(info.Width), int(info.Height)
 				frameWidth, frameHeight = next.frame.Bounds().Dx(), next.frame.Bounds().Dy()
+				displayedGPUScaled = info.GPUScaled
 				blankPending = false
 				if visibility.presented() {
 					emit(previewinput.Event{Kind: "ready"})

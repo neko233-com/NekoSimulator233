@@ -31,3 +31,14 @@ func TestVisibilityEvents(t *testing.T) {
 		t.Fatal("unknown visibility accepted")
 	}
 }
+
+func TestGPUAndCPUScaledPointUseTheirOwnSampling(t *testing.T) {
+	e := Event{Kind: "down", X: 3, Y: 3, Width: 5, Height: 5, FrameWidth: 3, FrameHeight: 3}
+	if x, y, ok := e.Point(false); !ok || x != 1 || y != 1 {
+		t.Fatalf("CPU sample %d,%d %v", x, y, ok)
+	}
+	e.GPUScaled = true
+	if x, y, ok := e.Point(false); !ok || x != 2 || y != 2 {
+		t.Fatalf("GPU sample %d,%d %v", x, y, ok)
+	}
+}

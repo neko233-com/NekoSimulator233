@@ -19,18 +19,23 @@ func main() {
 	testPixels := flag.Bool("pixels", false, "upload and verify a patterned frame in this short-lived process")
 	testLetterbox := flag.Bool("letterbox", false, "verify GPU black bars and an unscaled patterned frame in a 64x64 hidden window")
 	testGPUScale := flag.Bool("gpu-scale", false, "verify integer GPU scaling of a patterned frame in a 64x64 hidden window")
+	testFractional := flag.Bool("gpu-scale-fractional", false, "verify fractional GPU scaling of a patterned frame in a 50x50 hidden window")
 	flag.Parse()
 	var info vulkan.DeviceInfo
 	var err error
-	if *testGPUScale {
-		frame := image.NewRGBA(image.Rect(0, 0, 32, 32))
-		for y := 0; y < 32; y++ {
-			for x := 0; x < 32; x++ {
+	if *testGPUScale || *testFractional {
+		sourceSize, targetSize := 32, 64
+		if *testFractional {
+			sourceSize, targetSize = 30, 50
+		}
+		frame := image.NewRGBA(image.Rect(0, 0, sourceSize, sourceSize))
+		for y := 0; y < sourceSize; y++ {
+			for x := 0; x < sourceSize; x++ {
 				i := y*frame.Stride + x*4
 				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3] = byte(x*7), byte(y*7), byte(x+y), 255
 			}
 		}
-		info, err = vulkan.ProbeGPUScaledFrame(frame, 64, 64)
+		info, err = vulkan.ProbeGPUScaledFrame(frame, targetSize, targetSize)
 		if err == nil && (info.TestSurface == nil || !info.TestSurface.GPUScaled) {
 			err = fmt.Errorf("宿主不支持实验性 GPU 缩放路径")
 		}

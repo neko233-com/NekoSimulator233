@@ -50,6 +50,21 @@ func TestPreviewMouseMappingAndRelease(t *testing.T) {
 	}
 }
 
+func TestPreviewGPUScaledPointerUsesCenteredSample(t *testing.T) {
+	v := &viewer{width: 3, height: 3, events: make(chan pointerEvent, 8), done: make(chan struct{})}
+	v.previewShown.Store(true)
+	v.previewReady = true
+	v.applyPreviewInput(previewinput.Event{Kind: "down", X: 3, Y: 3, Width: 5, Height: 5, FrameWidth: 3, FrameHeight: 3, GPUScaled: true})
+	select {
+	case got := <-v.events:
+		if got.kind != pointerDown || got.x != 2 || got.y != 2 {
+			t.Fatalf("GPU pointer mapping %+v", got)
+		}
+	default:
+		t.Fatal("GPU pointer event was not delivered")
+	}
+}
+
 func TestPreviewInactiveRejectsInputAndRecovers(t *testing.T) {
 	v := &viewer{width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{})}
 	v.previewShown.Store(true)

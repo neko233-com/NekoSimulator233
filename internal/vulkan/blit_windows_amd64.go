@@ -178,8 +178,8 @@ func (op *presentResources) ensureBlitImage(h *Host, p blitProcs, width, height,
 	return nil
 }
 
-// recordScaledFrame is used only for integer upscales, so the nearest-filter
-// image and existing pointer-coordinate mapping select the same pixels.
+// recordScaledFrame uses nearest filtering. Preview input is mapped to the
+// same centered sampling coordinates when this path presents a frame.
 func recordScaledFrame(op *presentResources, cmd uintptr, dst uint64, rng *imageSubresourceRange, fit *fitPlan) error {
 	src := op.scaled
 	barrier := imageMemoryBarrier{SType: 45, DstAccess: vkAccessTransferWrite, OldLayout: vkLayoutUndefined, NewLayout: vkLayoutTransferDst, SrcQueueFamily: vkIgnoredQueue, DstQueueFamily: vkIgnoredQueue, Image: src.image, Range: *rng}
