@@ -16,6 +16,20 @@ import (
 // present is reserved for a short-lived probe process: if the GPU stops
 // responding, the process must exit to let Windows release its resources.
 func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) {
+	var frame *image.RGBA
+	if pixels {
+		frame = image.NewRGBA(image.Rect(0, 0, 64, 64))
+		for y := 0; y < 64; y++ {
+			for x := 0; x < 64; x++ {
+				i := y*frame.Stride + x*4
+				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3] = byte(x*3), byte(y*3), byte(x+y), 255
+			}
+		}
+	}
+	return inspectHiddenFrame(h, 64, 64, present, frame)
+}
+
+func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.RGBA) (SwapchainInfo, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	createWindow := user32.NewProc("CreateWindowExW")
@@ -25,7 +39,7 @@ func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) 
 	if module == 0 {
 		return SwapchainInfo{}, fmt.Errorf("获取进程模块失败：%w", err)
 	}
-	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class)), 0, 0x80000000, 0, 0, 64, 64, 0, 0, module, 0)
+	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class)), 0, 0x80000000, 0, 0, uintptr(width), uintptr(height), 0, 0, module, 0)
 	runtime.KeepAlive(class)
 	if hwnd == 0 {
 		return SwapchainInfo{}, fmt.Errorf("创建测试窗口失败：%w", err)
@@ -51,17 +65,10 @@ func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) 
 		}
 		info.ClearSubmitted = true
 	}
-	if pixels {
-		if info.Width != 64 || info.Height != 64 {
+	if frame != nil {
+		if int(info.Width) != width || int(info.Height) != height {
 			_ = s.Close()
 			return SwapchainInfo{}, fmt.Errorf("测试窗口尺寸异常：%dx%d", info.Width, info.Height)
-		}
-		frame := image.NewRGBA(image.Rect(0, 0, int(info.Width), int(info.Height)))
-		for y := 0; y < frame.Rect.Dy(); y++ {
-			for x := 0; x < frame.Rect.Dx(); x++ {
-				i := y*frame.Stride + x*4
-				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3] = byte(x*3), byte(y*3), byte(x+y), 255
-			}
 		}
 		if err := s.PresentRGBA(frame, true); err != nil {
 			if closeErr := s.Close(); closeErr != nil {
@@ -73,6 +80,7 @@ func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) 
 		info.PixelsVerified = true
 	}
 	if err := s.Close(); err != nil {
+		destroy = false
 		return SwapchainInfo{}, err
 	}
 	return info, nil

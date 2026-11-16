@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"image"
 	"image/png"
 	"io"
 	"os"
@@ -16,7 +18,54 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/testutil"
+	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
+
+func TestGuestFrameToolKeepsPixelsPrivate(t *testing.T) {
+	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	frame.Pix[0] = 123
+	called := false
+	s := &Service{
+		captureProbeFrame: func(context.Context) (*image.RGBA, error) { return frame, nil },
+		guestFrameProbe: func(_ context.Context, got *image.RGBA) (vulkan.DeviceInfo, error) {
+			called = true
+			if got != frame || got.Pix[0] != 123 {
+				t.Fatal("frame not passed to probe")
+			}
+			return vulkan.DeviceInfo{Name: "fake", TestSurface: &vulkan.SwapchainInfo{Width: 2, Height: 2, ImageCount: 3, PixelsVerified: true}}, nil
+		},
+	}
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	ss, err := newServer(s).Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_test_vulkan_guest_frame", Arguments: map[string]any{}})
+	if err != nil || result.IsError || !called {
+		t.Fatalf("tool failed: %+v %v", result, err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil || strings.Contains(string(data), "Pix") || strings.Contains(string(data), "123") {
+		t.Fatalf("pixels in response: %s %v", data, err)
+	}
+	called = false
+	s.captureProbeFrame = func(context.Context) (*image.RGBA, error) { return nil, errors.New("capture failed") }
+	if _, _, err := s.testVulkanGuestFrame(ctx, nil, Empty{}); err == nil || called {
+		t.Fatal("capture failure was not propagated")
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, _, err := s.testVulkanGuestFrame(canceled, nil, Empty{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled call: %v", err)
+	}
+}
 
 func TestJoystickRejectsInvalidSequenceBeforeOpeningInstance(t *testing.T) {
 	s := &Service{Manager: func() (avd.Manager, error) {
@@ -69,7 +118,7 @@ func TestLiveMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 26 {
+	if len(list.Tools) != 27 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	call := func(name string, args any) *mcp.CallToolResult {

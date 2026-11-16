@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
+	"github.com/neko233-com/NekoSimulator233/internal/frameprobe"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
@@ -32,17 +34,37 @@ func (b *boundedOutput) Write(data []byte) (int, error) {
 // A dedicated subprocess contains any stalled GPU work and owns its hidden
 // window. It is terminated on timeout, without affecting running emulators.
 func runPresentProbe(ctx context.Context, pixels bool) (vulkan.DeviceInfo, error) {
+	mode := "--vulkan-present-probe"
+	if pixels {
+		mode = "--vulkan-pixel-probe"
+	}
+	return runVulkanProbe(ctx, mode, nil, pixels, true)
+}
+
+func runGuestFrameProbe(ctx context.Context, frame *image.RGBA) (vulkan.DeviceInfo, error) {
+	input, err := frameprobe.Reader(frame)
+	if err != nil {
+		return vulkan.DeviceInfo{}, err
+	}
+	info, err := runVulkanProbe(ctx, "--vulkan-guest-frame-probe", input, true, false)
+	if err != nil {
+		return vulkan.DeviceInfo{}, err
+	}
+	if int(info.TestSurface.Width) != frame.Rect.Dx() || int(info.TestSurface.Height) != frame.Rect.Dy() || info.TestSurface.ImageCount == 0 {
+		return vulkan.DeviceInfo{}, errors.New("Vulkan 画面验证尺寸无效")
+	}
+	return info, nil
+}
+
+func runVulkanProbe(ctx context.Context, mode string, input io.Reader, pixels, clear bool) (vulkan.DeviceInfo, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return vulkan.DeviceInfo{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	mode := "--vulkan-present-probe"
-	if pixels {
-		mode = "--vulkan-pixel-probe"
-	}
 	cmd := exec.CommandContext(ctx, exe, mode)
+	cmd.Stdin = input
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stdout, stderr boundedOutput
 	stdout.limit, stderr.limit = 65536, 16384
@@ -67,7 +89,7 @@ func runPresentProbe(ctx context.Context, pixels bool) (vulkan.DeviceInfo, error
 	if err = decoder.Decode(&extra); err != io.EOF {
 		return vulkan.DeviceInfo{}, errors.New("Vulkan 呈现测试响应包含额外内容")
 	}
-	if info.TestSurface == nil || !info.TestSurface.ClearSubmitted {
+	if info.TestSurface == nil || (clear && !info.TestSurface.ClearSubmitted) {
 		return vulkan.DeviceInfo{}, errors.New("Vulkan 呈现测试没有完成提交")
 	}
 	if pixels && !info.TestSurface.PixelsVerified {

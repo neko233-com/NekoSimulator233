@@ -31,14 +31,14 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.27
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.27-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.28
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.28-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.28-x64.msi -Version 0.1.28
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.29-x64.msi -Version 0.1.29
 ```
 
 安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
@@ -47,7 +47,9 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。除 `neko_host_vulkan` 查询 Windows 宿主以外，这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
-`neko_host_vulkan` 会短暂创建并销毁宿主 Vulkan 图形设备，报告设备、图形队列及驱动声明的交换链和 Win32 外部资源扩展；传入 `{"test_surface":true}` 时还会创建并销毁 64×64 隐藏测试窗口和交换链。传入 `{"test_present":true}` 时会在独立子进程向隐藏交换链提交纯色画面；传入 `{"test_pixels":true}` 还会上传图案并从 GPU 图像回读比对。呈现测试需要驱动支持交换链维护扩展，像素测试还需要交换链支持回读。查询不启动 Android 实例，也不证明屏幕上实际显示了像素或外部资源互操作可用。宿主设备和交换链目前尚未接入模拟器画面；实验像素路径复用成功帧的资源，但每帧仍同步等待，尚未完成真实多帧和游戏性能验证。源码目录中可用 `go run ./cmd/vulkan-host-probe -pixels` 独立执行像素测试。
+`neko_test_vulkan_guest_frame` 对已运行的所选独立实例截图，通过内存管道交给隔离子进程，在隐藏 Vulkan 窗口上传并回读比对；仅返回设备和验证结果，不返回或保存截图。它不会启动实例。该诊断会分配画面和 GPU 资源，尚未完成真实实例端到端验证，不代表可见窗口已经接入 Vulkan 或证明游戏性能。
+
+`neko_host_vulkan` 会短暂创建并销毁宿主 Vulkan 图形设备，报告设备、图形队列及驱动声明的交换链和 Win32 外部资源扩展；传入 `{"test_surface":true}` 时还会创建并销毁 64×64 隐藏测试窗口和交换链。传入 `{"test_present":true}` 时会在独立子进程向隐藏交换链提交纯色画面；传入 `{"test_pixels":true}` 还会上传图案并从 GPU 图像回读比对。呈现测试需要驱动支持交换链维护扩展，像素测试还需要交换链支持回读。查询不启动 Android 实例，也不证明屏幕上实际显示了像素或外部资源互操作可用。实验像素路径复用成功帧的资源，但每帧仍同步等待，尚未完成真实多帧和游戏性能验证。源码目录中可用 `go run ./cmd/vulkan-host-probe -pixels` 独立执行像素测试。
 
 MCP 默认选择 `NekoSimulator233` 实例；使用 `neko_create_instance` 创建，参数 `api` 可选 30、34 或 35，省略时按默认策略选择 35 或 34。使用 `neko_select_instance` 选择后，其他操作针对所选实例。选择状态属于 MCP 服务进程，连接同一进程的客户端会共享该选择；可为需要隔离选择状态的客户端分别启动服务进程。
 

@@ -7,6 +7,7 @@ package vulkan
 import (
 	"errors"
 	"fmt"
+	"image"
 	"runtime"
 	"strings"
 	"sync"
@@ -379,6 +380,28 @@ func ProbePresent() (DeviceInfo, error) {
 // ProbePixels additionally uploads a patterned frame and verifies GPU readback.
 // Like ProbePresent it must run in a short-lived subprocess.
 func ProbePixels() (DeviceInfo, error) { return probePresent(true) }
+
+// ProbeFrame must run in a disposable subprocess that owns the GPU resources.
+func ProbeFrame(frame *image.RGBA) (DeviceInfo, error) {
+	if frame == nil || frame.Rect.Dx() <= 0 || frame.Rect.Dy() <= 0 {
+		return DeviceInfo{}, errors.New("画面尺寸无效")
+	}
+	h, err := OpenHost()
+	if err != nil {
+		return DeviceInfo{}, err
+	}
+	info := h.Info()
+	surface, err := inspectHiddenFrame(h, frame.Rect.Dx(), frame.Rect.Dy(), false, frame)
+	if err != nil {
+		_ = h.Close()
+		return DeviceInfo{}, err
+	}
+	info.TestSurface = &surface
+	if err = h.Close(); err != nil {
+		return DeviceInfo{}, err
+	}
+	return info, nil
+}
 
 func probePresent(pixels bool) (DeviceInfo, error) {
 	h, err := OpenHost()

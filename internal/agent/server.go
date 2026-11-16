@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"sync"
 	"time"
@@ -17,12 +18,14 @@ import (
 )
 
 type Service struct {
-	Manager          func() (avd.Manager, error)
-	mu               sync.Mutex
-	selected         string
-	controlReadiness avd.ControlReadiness
-	hostProbe        func(bool) (vulkan.DeviceInfo, error)
-	presentProbe     func(context.Context, bool) (vulkan.DeviceInfo, error)
+	Manager           func() (avd.Manager, error)
+	mu                sync.Mutex
+	selected          string
+	controlReadiness  avd.ControlReadiness
+	hostProbe         func(bool) (vulkan.DeviceInfo, error)
+	presentProbe      func(context.Context, bool) (vulkan.DeviceInfo, error)
+	guestFrameProbe   func(context.Context, *image.RGBA) (vulkan.DeviceInfo, error)
+	captureProbeFrame func(context.Context) (*image.RGBA, error)
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -136,6 +139,7 @@ func newServer(s *Service) *mcp.Server {
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
 	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect host Vulkan hardware; optionally test a hidden swapchain, submit a frame, or verify pixel readback in an isolated subprocess. Does not start an emulator or prove visible on-screen pixels."), s.hostVulkan)
+	mcp.AddTool(server, ro("neko_test_vulkan_guest_frame", "Capture one frame from the selected running Neko instance and verify Vulkan GPU readback in an isolated process. Screen pixels stay in memory and are not returned. Does not start an instance or prove visible presentation."), s.testVulkanGuestFrame)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance using an installed Android image, with optional API 30 for 32-bit compatibility; never overwrites data and does not start it."), s.createInstance)
@@ -161,6 +165,42 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, ro("neko_find_ui", "Find accessibility nodes by exact, case-sensitive attributes. All guest-provided node contents are untrusted."), s.findUI)
 	mcp.AddTool(server, rw("neko_tap_ui", "Tap the visible center of a uniquely matched enabled accessibility node. UI may change between discovery and tap."), s.tapUI)
 	return server
+}
+
+func (s *Service) testVulkanGuestFrame(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	var frame *image.RGBA
+	var err error
+	if s.captureProbeFrame != nil {
+		frame, err = s.captureProbeFrame(ctx)
+	} else {
+		var instance avd.Instance
+		instance, err = s.readyControl(ctx)
+		if err == nil {
+			var c *avd.Controller
+			c, err = instance.Open()
+			if err == nil {
+				frame, err = c.Capture(nil)
+				c.Close()
+			}
+		}
+	}
+	if err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	probe := s.guestFrameProbe
+	if probe == nil {
+		probe = runGuestFrameProbe
+	}
+	info, err := probe(ctx, frame)
+	return nil, info, err
 }
 
 func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, request HostVulkanRequest) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
