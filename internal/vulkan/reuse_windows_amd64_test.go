@@ -154,6 +154,8 @@ func TestTimedOutPresentRetainsResourcesUntilSafe(t *testing.T) {
 				b.procs.destroyBuffer = windows.NewCallback(func(_, _, _ uintptr) uintptr { driver.stagingBuffers++; return 0 })
 				b.procs.free = windows.NewCallback(func(_, _, _ uintptr) uintptr { driver.stagingMemory++; return 0 })
 				op.staging = b
+				second := &stagingBuffer{buffer: 8, memory: 9, size: len(data), mapped: unsafe.Pointer(&data[0]), procs: b.procs}
+				op.readback = second
 				return nil
 			}, record: func(_ *Host, _ *presentResources, _ uintptr, _ uint64, _ *imageSubresourceRange) (uint32, uint32, error) {
 				return vkLayoutTransferDst, vkAccessTransferWrite, nil
@@ -168,7 +170,7 @@ func TestTimedOutPresentRetainsResourcesUntilSafe(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if driver.destroyedFences != 3 || driver.destroyedPools != 1 || driver.destroyedSemaphores != 1 || driver.stagingUnmaps != 1 || driver.stagingBuffers != 1 || driver.stagingMemory != 1 {
+			if driver.destroyedFences != 3 || driver.destroyedPools != 1 || driver.destroyedSemaphores != 1 || driver.stagingUnmaps != 2 || driver.stagingBuffers != 2 || driver.stagingMemory != 2 {
 				t.Fatalf("resources not released after fence completion: %+v", driver)
 			}
 		})

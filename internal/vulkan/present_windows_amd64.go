@@ -142,6 +142,7 @@ type presentResources struct {
 	command                                                 uintptr
 	acquirePending, renderPending, presentPending           bool
 	staging                                                 *stagingBuffer
+	readback                                                *stagingBuffer
 }
 
 func (op *presentResources) releaseIfSafe(h *Host) error {
@@ -168,6 +169,10 @@ func (op *presentResources) releaseIfSafe(h *Host) error {
 	if op.staging != nil {
 		op.staging.release(h)
 		op.staging = nil
+	}
+	if op.readback != nil {
+		op.readback.release(h)
+		op.readback = nil
 	}
 	if op.pool != 0 {
 		_, _ = call(op.procs.destroyPool, h.device, uintptr(op.pool), 0)

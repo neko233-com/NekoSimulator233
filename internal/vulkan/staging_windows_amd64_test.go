@@ -5,6 +5,7 @@ package vulkan
 import (
 	"bytes"
 	"image"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -63,6 +64,82 @@ func TestUnscaledLetterboxRecordsClearBarrierAndSourceCopy(t *testing.T) {
 		if err != nil || plan.unscaledLetterbox() {
 			t.Fatalf("incorrect fast-path selection for %v", dims)
 		}
+	}
+}
+
+func TestUnscaledLetterboxUsesSamePathForReadbackVerification(t *testing.T) {
+	frame := image.NewRGBA(image.Rect(0, 0, 4, 2))
+	for i := range frame.Pix {
+		frame.Pix[i] = byte(i*17 + 1)
+	}
+	extent := extent2D{4, 5}
+	pixels := make([]byte, int(extent.Width*extent.Height*4))
+	buffers := map[uintptr][]byte{}
+	var nextHandle uintptr = 10
+	var invalid bool
+	var corrupt bool
+	driver := &mockFrameDriver{}
+	p := driver.procs()
+	p.clear = windows.NewCallback(func(_, _, _, color, _, _ uintptr) uintptr {
+		if *(*[4]float32)(unsafe.Pointer(color)) != [4]float32{0, 0, 0, 1} {
+			invalid = true
+		}
+		for i := 0; i < len(pixels); i += 4 {
+			pixels[i], pixels[i+1], pixels[i+2], pixels[i+3] = 0, 0, 0, 255
+		}
+		return 0
+	})
+	copyTo := windows.NewCallback(func(_, buffer, _, _, _, ptr uintptr) uintptr {
+		region := *(*bufferImageCopy)(unsafe.Pointer(ptr))
+		src := buffers[buffer]
+		if region.Extent.Width != 4 || region.Extent.Height != 2 || region.Offset.Y != 1 || len(src) != len(frame.Pix) {
+			invalid = true
+			return 0
+		}
+		for y := 0; y < int(region.Extent.Height); y++ {
+			copy(pixels[(y+int(region.Offset.Y))*int(extent.Width)*4:], src[y*int(region.Extent.Width)*4:(y+1)*int(region.Extent.Width)*4])
+		}
+		return 0
+	})
+	copyFrom := windows.NewCallback(func(_, _, _, buffer, _, _ uintptr) uintptr {
+		copy(buffers[buffer], pixels)
+		if corrupt {
+			buffers[buffer][0] ^= 1
+		}
+		return 0
+	})
+	create := func(b *stagingBuffer, _ *Host, size int, verify bool) error {
+		nextHandle++
+		data := make([]byte, size)
+		buffers[nextHandle] = data
+		b.buffer, b.memory, b.size, b.verify, b.mapped = uint64(nextHandle), uint64(nextHandle+100), size, verify, unsafe.Pointer(&data[0])
+		b.procs.copyToImage, b.procs.copyFromImage = copyTo, copyFrom
+		b.procs.unmapMemory = windows.NewCallback(func(_, _ uintptr) uintptr { return 0 })
+		b.procs.destroyBuffer = windows.NewCallback(func(_, _, _ uintptr) uintptr { return 0 })
+		b.procs.free = windows.NewCallback(func(_, _, _ uintptr) uintptr { return 0 })
+		return nil
+	}
+	h := &Host{device: 1, queue: 2, info: DeviceInfo{PresentFence: true}}
+	s := &Swapchain{host: h, swapchain: 3, images: []uint64{4}, extent: extent, format: surfaceFormat{Format: vkFormatRGBA8}, usage: vkUsageTransferSrc}
+	if err := s.presentFrameWith(s.frameRGBAHooks(frame, true, true, create), func(*Host) (presentProcs, error) { return p, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if invalid || s.reusable.staging.size != len(frame.Pix) || s.reusable.readback == nil || s.reusable.readback.size != len(pixels) {
+		t.Fatalf("fast path or readback buffer incorrect: invalid=%v", invalid)
+	}
+	want := make([]byte, len(pixels))
+	if err := fittedFrame(want, frame, extent, vkFormatRGBA8, false); err != nil || !bytes.Equal(pixels, want) {
+		t.Fatal("verified GPU output differs from reference", err)
+	}
+	if err := s.presentFrameWith(s.frameRGBAHooks(frame, false, true, create), func(*Host) (presentProcs, error) { return p, nil }); err != nil || s.reusable.readback != nil {
+		t.Fatalf("diagnostic buffer was not released when verification stopped: %v", err)
+	}
+	corrupt = true
+	if err := s.presentFrameWith(s.frameRGBAHooks(frame, true, true, create), func(*Host) (presentProcs, error) { return p, nil }); err == nil || !strings.Contains(err.Error(), "回读不一致") {
+		t.Fatalf("corrupted readback was not rejected: %v", err)
+	}
+	if s.reusable != nil || s.pending != nil || !s.poisoned {
+		t.Fatal("failed verification did not retire both buffers safely")
 	}
 }
 

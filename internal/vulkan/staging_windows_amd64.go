@@ -103,13 +103,17 @@ func (b *stagingBuffer) compatible(size int, verify bool) bool {
 // The previous command pool has already been reset before this is called,
 // so no executable or pending command buffer still references an old buffer.
 func (op *presentResources) ensureStaging(h *Host, size int, verify bool, create func(*stagingBuffer, *Host, int, bool) error) error {
-	if op.staging != nil && !op.staging.compatible(size, verify) {
-		op.staging.release(h)
-		op.staging = nil
+	return ensureBuffer(&op.staging, h, size, verify, create)
+}
+
+func ensureBuffer(slot **stagingBuffer, h *Host, size int, verify bool, create func(*stagingBuffer, *Host, int, bool) error) error {
+	if *slot != nil && !(*slot).compatible(size, verify) {
+		(*slot).release(h)
+		*slot = nil
 	}
-	if op.staging == nil {
-		op.staging = &stagingBuffer{}
-		if err := create(op.staging, h, size, verify); err != nil {
+	if *slot == nil {
+		*slot = &stagingBuffer{}
+		if err := create(*slot, h, size, verify); err != nil {
 			return err
 		}
 	}
@@ -350,15 +354,19 @@ func (s *Swapchain) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
 }
 
 func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
+	return s.presentFrame(s.frameRGBAHooks(frame, verify, fit, (*stagingBuffer).create))
+}
+
+func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create func(*stagingBuffer, *Host, int, bool) error) frameHooks {
 	var size int
 	var directLetterbox bool
 	pack := func(data []byte, compare bool) error {
 		if fit {
-			if directLetterbox {
-				return frameBytes(data, frame, s.format.Format, false)
-			}
 			if compare {
 				return fittedFrame(data, frame, s.extent, s.format.Format, true)
+			}
+			if directLetterbox {
+				return frameBytes(data, frame, s.format.Format, false)
 			}
 			return s.fit.pack(data, frame, s.format.Format)
 		}
@@ -378,7 +386,7 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 					size = int(w * h * 4)
 				}
 				if err == nil {
-					if err = s.ensureFitPlan(frame); err == nil && !verify && s.fit.unscaledLetterbox() {
+					if err = s.ensureFitPlan(frame); err == nil && s.fit.unscaledLetterbox() {
 						directLetterbox = true
 						size = sourceSize
 					}
@@ -395,8 +403,17 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 			return nil
 		},
 		prepare: func(h *Host, op *presentResources) error {
-			if err := op.ensureStaging(h, size, verify, (*stagingBuffer).create); err != nil {
+			if err := op.ensureStaging(h, size, verify && !directLetterbox, create); err != nil {
 				return err
+			}
+			if directLetterbox && verify {
+				readSize := int(s.extent.Width) * int(s.extent.Height) * 4
+				if err := ensureBuffer(&op.readback, h, readSize, true, create); err != nil {
+					return err
+				}
+			} else if op.readback != nil {
+				op.readback.release(h)
+				op.readback = nil
 			}
 			return op.staging.withMapped(h, func(data []byte) error { return pack(data, false) })
 		},
@@ -406,19 +423,22 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 				if err := recordUnscaledLetterbox(op, cmd, img, rng, s.fit); err != nil {
 					return 0, 0, err
 				}
-				return vkLayoutTransferDst, vkAccessTransferWrite, nil
-			}
-			region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Extent: extent3D{Width: s.extent.Width, Height: s.extent.Height, Depth: 1}}
-			_, err := call(b.procs.copyToImage, cmd, uintptr(b.buffer), uintptr(img), vkLayoutTransferDst, 1, uintptr(unsafe.Pointer(&region)))
-			if err != nil {
-				return 0, 0, err
+			} else {
+				region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Extent: extent3D{Width: s.extent.Width, Height: s.extent.Height, Depth: 1}}
+				if _, err := call(b.procs.copyToImage, cmd, uintptr(b.buffer), uintptr(img), vkLayoutTransferDst, 1, uintptr(unsafe.Pointer(&region))); err != nil {
+					return 0, 0, err
+				}
 			}
 			if !verify {
 				return vkLayoutTransferDst, vkAccessTransferWrite, nil
 			}
+			if directLetterbox {
+				b = op.readback
+			}
+			region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Extent: extent3D{Width: s.extent.Width, Height: s.extent.Height, Depth: 1}}
 			imageBarrier := imageMemoryBarrier{SType: 45, SrcAccess: vkAccessTransferWrite, DstAccess: vkAccessTransferRead, OldLayout: vkLayoutTransferDst, NewLayout: vkLayoutTransferSrc, SrcQueueFamily: vkIgnoredQueue, DstQueueFamily: vkIgnoredQueue, Image: img, Range: *rng}
 			bufferBarrier := bufferMemoryBarrier{SType: 44, SrcAccess: vkAccessTransferRead, DstAccess: vkAccessTransferWrite, SrcQueueFamily: vkIgnoredQueue, DstQueueFamily: vkIgnoredQueue, Buffer: b.buffer, Size: uint64(b.size)}
-			_, err = call(op.procs.barrier, cmd, vkStageTransfer, vkStageTransfer, 0, 0, 0, 1, uintptr(unsafe.Pointer(&bufferBarrier)), 1, uintptr(unsafe.Pointer(&imageBarrier)))
+			_, err := call(op.procs.barrier, cmd, vkStageTransfer, vkStageTransfer, 0, 0, 0, 1, uintptr(unsafe.Pointer(&bufferBarrier)), 1, uintptr(unsafe.Pointer(&imageBarrier)))
 			if err != nil {
 				return 0, 0, err
 			}
@@ -435,10 +455,14 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 	}
 	if verify {
 		hooks.verify = func(h *Host, op *presentResources) error {
-			return op.staging.withMapped(h, func(data []byte) error { return pack(data, true) })
+			b := op.staging
+			if directLetterbox {
+				b = op.readback
+			}
+			return b.withMapped(h, func(data []byte) error { return pack(data, true) })
 		}
 	}
-	return s.presentFrame(hooks)
+	return hooks
 }
 
 // recordUnscaledLetterbox clears the target on the GPU, synchronizes that
