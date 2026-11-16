@@ -60,53 +60,56 @@ func TestPumpFramesDropsStaleFramesAndKeepsConsumerBuffer(t *testing.T) {
 		t.Fatal("first request did not start empty")
 	}
 	send(1)
-	reused := nextRequest()
-	if reused == nil || reused.Pix[0] != 1 {
-		t.Fatal("first discarded frame not reused")
+	if nextRequest() != nil {
+		t.Fatal("second request should use the other buffer")
 	}
 	send(2)
-	if got := nextRequest(); got != reused || got.Pix[0] != 2 {
-		t.Fatal("stale buffer not reused")
+	reused := nextRequest()
+	if reused == nil || reused.Pix[0] != 1 {
+		t.Fatal("superseded frame was not reused")
 	}
-	nextEmpty := make(chan struct{})
-	go func() {
-		for value := byte(3); ; value++ {
-			select {
-			case s.values <- value:
-			case <-ctx.Done():
-				return
-			}
-			select {
-			case next := <-s.requests:
-				if next == nil {
-					close(nextEmpty)
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	send(3)
+	next := nextRequest()
+	if next == nil || next == reused || next.Pix[0] != 2 {
+		t.Fatal("second stale buffer not reused")
+	}
 	var result pumpedFrame
 	select {
 	case result = <-frames:
 	case <-time.After(time.Second):
 		t.Fatal("pump failed to deliver")
 	}
-	if result.err != nil || result.frame == nil {
+	if result.err != nil || result.frame == nil || result.frame.Pix[0] != 3 {
 		t.Fatalf("invalid frame: %+v", result)
 	}
 	value := result.frame.Pix[0]
-	select {
-	case <-nextEmpty:
-	case <-time.After(time.Second):
-		t.Fatal("consumer-owned frame was reused")
-	}
 	send(100)
-	if nextRequest() == result.frame || result.frame.Pix[0] != value {
+	if result.frame.Pix[0] != value {
 		t.Fatal("producer mutated consumer-owned frame")
 	}
 	available <- result.frame
+	if nextRequest() != result.frame {
+		t.Fatal("returned frame was not reused")
+	}
+}
+
+func TestPumpFramesRetainsSingleFrameUntilConsumerIsReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &controlledFrameStream{ctx: ctx, requests: make(chan *image.RGBA), values: make(chan byte)}
+	frames, _, done := pumpFrames(ctx, s)
+	defer func() { cancel(); <-done }()
+	<-s.requests
+	s.values <- 42
+	// The next read begins before the consumer accepts the first frame.
+	<-s.requests
+	select {
+	case result := <-frames:
+		if result.err != nil || result.frame == nil || result.frame.Pix[0] != 42 {
+			t.Fatalf("last frame was lost: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("last frame was not retained")
+	}
 }
 
 type failedFrameStream struct{}
