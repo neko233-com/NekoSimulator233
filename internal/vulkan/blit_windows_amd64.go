@@ -25,6 +25,11 @@ type imageCreateInfo struct {
 	InitialLayout                                                                      uint32
 }
 type formatProperties struct{ Linear, Optimal, Buffer uint32 }
+type imageFormatProperties struct {
+	MaxExtent                                  extent3D
+	MaxMipLevels, MaxArrayLayers, SampleCounts uint32
+	MaxResourceSize                            uint64
+}
 type imageBlit struct {
 	SrcSubresource imageSubresourceLayers
 	SrcOffsets     [2]offset3D
@@ -33,8 +38,8 @@ type imageBlit struct {
 }
 
 type blitProcs struct {
-	createImage, destroyImage, requirements, bindImage, formatProperties, blit uintptr
-	memory                                                                     stagingProcs
+	createImage, destroyImage, requirements, bindImage, formatProperties, imageFormatProperties, blit uintptr
+	memory                                                                                            stagingProcs
 }
 
 func (h *Host) blitProcs() (blitProcs, error) {
@@ -49,7 +54,7 @@ func (h *Host) blitProcs() (blitProcs, error) {
 		dst  *uintptr
 	}{
 		{"vkCreateImage", &p.createImage}, {"vkDestroyImage", &p.destroyImage}, {"vkGetImageMemoryRequirements", &p.requirements},
-		{"vkBindImageMemory", &p.bindImage}, {"vkGetPhysicalDeviceFormatProperties", &p.formatProperties}, {"vkCmdBlitImage", &p.blit},
+		{"vkBindImageMemory", &p.bindImage}, {"vkGetPhysicalDeviceFormatProperties", &p.formatProperties}, {"vkGetPhysicalDeviceImageFormatProperties", &p.imageFormatProperties}, {"vkCmdBlitImage", &p.blit},
 	} {
 		*entry.dst, err = getInstanceProc(h.getInstanceProcAddr, h.instance, entry.name)
 		if err != nil {
@@ -59,12 +64,44 @@ func (h *Host) blitProcs() (blitProcs, error) {
 	return p, nil
 }
 
-func supportsBlit(p blitProcs, h *Host, format uint32) bool {
+func supportsBlit(p blitProcs, h *Host, format uint32) (imageFormatProperties, bool, error) {
 	var props formatProperties
 	if _, err := call(p.formatProperties, h.physical, uintptr(format), uintptr(unsafe.Pointer(&props))); err != nil {
-		return false
+		return imageFormatProperties{}, false, err
 	}
-	return props.Optimal&(vkFormatBlitSrc|vkFormatBlitDst) == vkFormatBlitSrc|vkFormatBlitDst
+	if props.Optimal&(vkFormatBlitSrc|vkFormatBlitDst) != vkFormatBlitSrc|vkFormatBlitDst {
+		return imageFormatProperties{}, false, nil
+	}
+	var limits imageFormatProperties
+	r, err := call(p.imageFormatProperties, h.physical, uintptr(format), 1, 0, vkUsageTransferSrc|vkUsageTransferDst, 0, uintptr(unsafe.Pointer(&limits)))
+	if err != nil {
+		return imageFormatProperties{}, false, err
+	}
+	if int32(r) != vkSuccess {
+		if errors.Is(blitResult("vkGetPhysicalDeviceImageFormatProperties", r), errBlitUnavailable) {
+			return imageFormatProperties{}, false, nil
+		}
+		return imageFormatProperties{}, false, result("vkGetPhysicalDeviceImageFormatProperties", r)
+	}
+	if limits.MaxMipLevels < 1 || limits.MaxArrayLayers < 1 || limits.SampleCounts&1 == 0 || limits.MaxExtent.Depth < 1 || limits.MaxResourceSize == 0 {
+		return imageFormatProperties{}, false, nil
+	}
+	return limits, true, nil
+}
+
+func (p imageFormatProperties) fits(width, height uint32) bool {
+	return width > 0 && height > 0 && width <= p.MaxExtent.Width && height <= p.MaxExtent.Height && uint64(width)*uint64(height)*4 <= p.MaxResourceSize
+}
+
+var errBlitUnavailable = errors.New("Vulkan 缩放图像资源不可用")
+
+func blitResult(name string, value uintptr) error {
+	switch int32(value) {
+	case -1, -2, -11: // host/device memory exhausted or format unsupported
+		return fmt.Errorf("%w：%s 失败：VkResult %d", errBlitUnavailable, name, int32(value))
+	default:
+		return result(name, value)
+	}
 }
 
 func chooseImageMemory(p physicalMemoryProperties, bits uint32) (uint32, error) {
@@ -85,7 +122,7 @@ func chooseImageMemory(p physicalMemoryProperties, bits uint32) (uint32, error) 
 		}
 	}
 	if !found {
-		return 0, errors.New("Vulkan 没有兼容的图像内存类型")
+		return 0, fmt.Errorf("%w：没有兼容的图像内存类型", errBlitUnavailable)
 	}
 	return first, nil
 }
@@ -108,7 +145,7 @@ func (b *blitImage) create(h *Host, p blitProcs, width, height, format uint32) e
 	if err != nil {
 		return err
 	}
-	if err = result("vkCreateImage", r); err != nil {
+	if err = blitResult("vkCreateImage", r); err != nil {
 		return err
 	}
 	if image == 0 {
@@ -136,7 +173,7 @@ func (b *blitImage) create(h *Host, p blitProcs, width, height, format uint32) e
 	if err != nil {
 		return err
 	}
-	if err = result("vkAllocateMemory", r); err != nil {
+	if err = blitResult("vkAllocateMemory", r); err != nil {
 		return err
 	}
 	if memory == 0 {
@@ -147,7 +184,7 @@ func (b *blitImage) create(h *Host, p blitProcs, width, height, format uint32) e
 	if err != nil {
 		return err
 	}
-	if err = result("vkBindImageMemory", r); err != nil {
+	if err = blitResult("vkBindImageMemory", r); err != nil {
 		return fmt.Errorf("绑定缩放图像失败：%w", err)
 	}
 	return nil

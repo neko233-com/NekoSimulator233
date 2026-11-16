@@ -79,6 +79,7 @@ type Swapchain struct {
 	fit                              *fitPlan
 	blitChecked, blitSupported       bool
 	blit                             blitProcs
+	blitLimits                       imageFormatProperties
 	lastGPUScaled                    bool
 }
 

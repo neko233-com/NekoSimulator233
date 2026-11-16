@@ -418,12 +418,18 @@ func (s *Swapchain) frameRGBAHooksMode(frame *image.RGBA, verify, fit, wantGPU b
 				if err == nil && wantGPU && s.fit.stableGPUScale() && (s.format.Format == vkFormatRGBA8 || s.format.Format == vkFormatBGRA8) {
 					if !s.blitChecked {
 						p, resolveErr := resolveBlit(host)
-						s.blitChecked = true
-						if resolveErr == nil && supportsBlit(p, host, s.format.Format) {
-							s.blit, s.blitSupported = p, true
+						if resolveErr == nil {
+							limits, ok, queryErr := supportsBlit(p, host, s.format.Format)
+							if queryErr != nil {
+								return queryErr
+							}
+							if ok {
+								s.blit, s.blitLimits, s.blitSupported = p, limits, true
+							}
 						}
+						s.blitChecked = true
 					}
-					if s.blitSupported {
+					if s.blitSupported && s.blitLimits.fits(uint32(s.fit.sw), uint32(s.fit.sh)) {
 						gpuScale, size = true, sourceSize
 					}
 				}
@@ -442,16 +448,27 @@ func (s *Swapchain) frameRGBAHooksMode(frame *image.RGBA, verify, fit, wantGPU b
 			return nil
 		},
 		prepare: func(h *Host, op *presentResources) error {
-			if err := op.ensureStaging(h, size, verify && !directLetterbox && !gpuScale, create); err != nil {
-				return err
-			}
 			if gpuScale {
 				if err := op.ensureBlitImage(h, s.blit, uint32(s.fit.sw), uint32(s.fit.sh), s.format.Format); err != nil {
-					return err
+					if !errors.Is(err, errBlitUnavailable) {
+						return err
+					}
+					if op.scaled != nil {
+						op.scaled.release(h)
+						op.scaled = nil
+					}
+					gpuScale, s.blitSupported = false, false
+					size = int(s.extent.Width) * int(s.extent.Height) * 4
+					if usedGPU != nil {
+						*usedGPU = false
+					}
 				}
 			} else if op.scaled != nil {
 				op.scaled.release(h)
 				op.scaled = nil
+			}
+			if err := op.ensureStaging(h, size, verify && !directLetterbox && !gpuScale, create); err != nil {
+				return err
 			}
 			if (directLetterbox || gpuScale) && verify {
 				readSize := int(s.extent.Width) * int(s.extent.Height) * 4

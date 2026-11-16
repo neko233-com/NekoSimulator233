@@ -19,12 +19,24 @@ func TestBlitWin64ABI(t *testing.T) {
 	}{
 		{"VkImageCreateInfo", unsafe.Sizeof(imageCreateInfo{}), 88},
 		{"VkFormatProperties", unsafe.Sizeof(formatProperties{}), 12},
+		{"VkImageFormatProperties", unsafe.Sizeof(imageFormatProperties{}), 32},
 		{"VkImageBlit", unsafe.Sizeof(imageBlit{}), 80},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s: got %d want %d", tc.name, tc.got, tc.want)
 		}
 	}
+}
+
+func fakeImageFormatProperties() uintptr {
+	return windows.NewCallback(func(_, _, typ, tiling, usage, flags uintptr, props *imageFormatProperties) uintptr {
+		if typ != 1 || tiling != 0 || usage != vkUsageTransferSrc|vkUsageTransferDst || flags != 0 {
+			return uintptr(uint32(0xfffffff5))
+		}
+		props.MaxExtent = extent3D{8192, 8192, 1}
+		props.MaxMipLevels, props.MaxArrayLayers, props.SampleCounts, props.MaxResourceSize = 1, 1, 1, 1<<32
+		return 0
+	})
 }
 
 func TestIntegerGPUScalingMatchesInputMapping(t *testing.T) {
@@ -59,13 +71,23 @@ func TestIntegerGPUScalingMatchesInputMapping(t *testing.T) {
 func TestBlitFormatAndMemorySelection(t *testing.T) {
 	h := &Host{physical: 1}
 	props := uint32(vkFormatBlitSrc | vkFormatBlitDst)
-	p := blitProcs{formatProperties: windows.NewCallback(func(_, _ uintptr, out *formatProperties) uintptr { out.Optimal = props; return 0 })}
-	if !supportsBlit(p, h, vkFormatRGBA8) {
+	p := blitProcs{formatProperties: windows.NewCallback(func(_, _ uintptr, out *formatProperties) uintptr { out.Optimal = props; return 0 }), imageFormatProperties: fakeImageFormatProperties()}
+	limits, supported, err := supportsBlit(p, h, vkFormatRGBA8)
+	if err != nil || !supported || !limits.fits(1920, 1080) || limits.fits(8193, 1) {
 		t.Fatal("supported blit was rejected")
 	}
 	props = vkFormatBlitSrc
-	if supportsBlit(p, h, vkFormatRGBA8) {
+	if _, supported, err := supportsBlit(p, h, vkFormatRGBA8); supported || err != nil {
 		t.Fatal("missing destination support was accepted")
+	}
+	props = vkFormatBlitSrc | vkFormatBlitDst
+	p.imageFormatProperties = windows.NewCallback(func(_, _, _, _, _, _, _ uintptr) uintptr { return uintptr(uint32(0xfffffff5)) })
+	if _, supported, err := supportsBlit(p, h, vkFormatRGBA8); supported || err != nil {
+		t.Fatal("unsupported image configuration accepted")
+	}
+	p.imageFormatProperties = windows.NewCallback(func(_, _, _, _, _, _, _ uintptr) uintptr { return uintptr(uint32(0xfffffffc)) })
+	if _, supported, err := supportsBlit(p, h, vkFormatRGBA8); supported || err == nil {
+		t.Fatal("device loss was silently ignored")
 	}
 	memory := physicalMemoryProperties{TypeCount: 3}
 	memory.Types[1].Flags = vkMemoryDeviceLocal
@@ -158,7 +180,7 @@ func TestGPUScaleAllowsUnambiguousNonIntegerRatios(t *testing.T) {
 
 func TestFractionalGPUSelectionAndAmbiguousFallback(t *testing.T) {
 	h := &Host{device: 1, physical: 2, info: DeviceInfo{PresentFence: true}}
-	procs := blitProcs{formatProperties: windows.NewCallback(func(_, _ uintptr, props *formatProperties) uintptr {
+	procs := blitProcs{imageFormatProperties: fakeImageFormatProperties(), formatProperties: windows.NewCallback(func(_, _ uintptr, props *formatProperties) uintptr {
 		props.Optimal = vkFormatBlitSrc | vkFormatBlitDst
 		return 0
 	})}
@@ -252,6 +274,7 @@ func TestIntegerGPUScalePipelineAndReadback(t *testing.T) {
 		props.Optimal = vkFormatBlitSrc | vkFormatBlitDst
 		return 0
 	})
+	blit.imageFormatProperties = fakeImageFormatProperties()
 	blit.createImage = windows.NewCallback(func(_ uintptr, info *imageCreateInfo, _ uintptr, out *uint64) uintptr {
 		if info.Extent != (extent3D{2, 2, 1}) || info.Usage != vkUsageTransferSrc|vkUsageTransferDst || info.Format != vkFormatRGBA8 {
 			invalid = true
@@ -290,5 +313,67 @@ func TestIntegerGPUScalePipelineAndReadback(t *testing.T) {
 	}
 	if err := s.reusable.releaseIfSafe(h); err != nil || imageReleases != 1 || memoryReleases != 1 {
 		t.Fatalf("scale resources not released: %v %d %d", err, imageReleases, memoryReleases)
+	}
+}
+
+func TestGPUImageAllocationFailureFallsBackWithoutHidingDeviceLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		result   uint32
+		fallback bool
+	}{
+		{"out_of_device_memory", 0xfffffffe, true},
+		{"device_lost", 0xfffffffc, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver := &mockFrameDriver{}
+			present := driver.procs()
+			var attempts, imageReleases, uploads int
+			procs := blitProcs{imageFormatProperties: fakeImageFormatProperties()}
+			procs.formatProperties = windows.NewCallback(func(_, _ uintptr, props *formatProperties) uintptr {
+				props.Optimal = vkFormatBlitSrc | vkFormatBlitDst
+				return 0
+			})
+			procs.createImage = windows.NewCallback(func(_ uintptr, _ *imageCreateInfo, _ uintptr, out *uint64) uintptr { attempts++; *out = 20; return 0 })
+			procs.requirements = windows.NewCallback(func(_, _ uintptr, req *memoryRequirements) uintptr { req.Size, req.MemoryTypeBits = 64, 1; return 0 })
+			procs.memory.memoryProperties = windows.NewCallback(func(_ uintptr, props *physicalMemoryProperties) uintptr { props.TypeCount = 1; return 0 })
+			procs.memory.allocate = windows.NewCallback(func(_, _, _, _ uintptr) uintptr { return uintptr(tc.result) })
+			procs.destroyImage = windows.NewCallback(func(_, _, _ uintptr) uintptr { imageReleases++; return 0 })
+			data := make([]byte, 4*4*4)
+			create := func(b *stagingBuffer, _ *Host, size int, verify bool) error {
+				if size != len(data) {
+					t.Fatalf("fallback staging size %d", size)
+				}
+				b.buffer, b.memory, b.size, b.verify, b.mapped = 30, 31, size, verify, unsafe.Pointer(&data[0])
+				b.procs.copyToImage = windows.NewCallback(func(_, _, _, _, _, _ uintptr) uintptr { uploads++; return 0 })
+				b.procs.unmapMemory = windows.NewCallback(func(_, _ uintptr) uintptr { return 0 })
+				b.procs.destroyBuffer = windows.NewCallback(func(_, _, _ uintptr) uintptr { return 0 })
+				b.procs.free = windows.NewCallback(func(_, _, _ uintptr) uintptr { return 0 })
+				return nil
+			}
+			h := &Host{device: 1, physical: 2, queue: 3, info: DeviceInfo{PresentFence: true}}
+			s := &Swapchain{host: h, swapchain: 4, images: []uint64{5}, extent: extent2D{4, 4}, format: surfaceFormat{Format: vkFormatRGBA8}}
+			frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+			used := true
+			makeHooks := func() frameHooks {
+				return s.frameRGBAHooksMode(frame, false, true, true, &used, create, func(*Host) (blitProcs, error) { return procs, nil })
+			}
+			err := s.presentFrameWith(makeHooks(), func(*Host) (presentProcs, error) { return present, nil })
+			if !tc.fallback {
+				if err == nil || uploads != 0 || !s.poisoned || imageReleases != 1 {
+					t.Fatalf("device loss was hidden: %v uploads=%d releases=%d", err, uploads, imageReleases)
+				}
+				return
+			}
+			if err != nil || used || s.Info().GPUScaled || uploads != 1 || imageReleases != 1 || s.reusable.scaled != nil {
+				t.Fatalf("CPU fallback failed: %v used=%v uploads=%d releases=%d", err, used, uploads, imageReleases)
+			}
+			if err := s.presentFrameWith(makeHooks(), func(*Host) (presentProcs, error) { return present, nil }); err != nil || attempts != 1 || uploads != 2 {
+				t.Fatalf("failed GPU path retried: %v attempts=%d uploads=%d", err, attempts, uploads)
+			}
+			if err := s.reusable.releaseIfSafe(h); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
