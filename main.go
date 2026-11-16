@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
+	"github.com/neko233-com/NekoSimulator233/internal/migration"
 	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 	"github.com/neko233-com/NekoSimulator233/internal/update"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
@@ -267,6 +268,43 @@ func (a *app) open(instance mumu.Instance) {
 	}()
 }
 
+func (a *app) checkMuMuMigration(instance mumu.Instance) {
+	if a.busy {
+		return
+	}
+	a.busy = true
+	a.message = "正在只读检查迁移条件…"
+	client := a.client
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
+		defer cancel()
+		manager, err := avd.DiscoverManager()
+		var report migration.Report
+		if err == nil {
+			report, err = migration.Check(ctx, instance.Index, manager.SDK, client.ListContext)
+		}
+		a.window.Update(func() {
+			a.busy = false
+			if err != nil {
+				a.message = "迁移检查失败：" + err.Error()
+				return
+			}
+			image := "源系统版本尚无匹配的受支持镜像"
+			if report.MatchingImageAPI != 0 {
+				image = fmt.Sprintf("检测到 Android API %d system.img，完整性未验证", report.MatchingImageAPI)
+				if !report.MatchingImageFilePresent {
+					image = fmt.Sprintf("缺少 Android API %d system.img", report.MatchingImageAPI)
+				}
+			}
+			state := "未确认源实例运行状态"
+			if report.SourceRunningReported {
+				state = "源实例正在运行"
+			}
+			a.message = fmt.Sprintf("MuMu %s：%s；%s。完整数据迁移尚未实现，未修改实例。", report.SourceIndex, state, image)
+		})
+	}()
+}
+
 func (a *app) view(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Padding(28).Gap(12).Children(func() {
@@ -346,6 +384,9 @@ func (a *app) view(c *ui.Context) {
 				ui.Text(c, fmt.Sprintf("%s  ·  Android %s  ·  %s", instance.Name, instance.AndroidVersion, state))
 				if ui.PrimaryButton(c.Key("open-"+instance.Index), "打开").Disabled(a.busy).Clicked() {
 					a.open(instance)
+				}
+				if ui.Button(c.Key("migration-check-"+instance.Index), "检查迁移条件").Disabled(a.busy).Clicked() {
+					a.checkMuMuMigration(instance)
 				}
 			})
 		}

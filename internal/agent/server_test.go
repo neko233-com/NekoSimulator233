@@ -17,9 +17,44 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
+	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 	"github.com/neko233-com/NekoSimulator233/internal/testutil"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
+
+func TestMuMuMigrationPreflightMCP(t *testing.T) {
+	sdk := t.TempDir()
+	s := &Service{
+		Manager: func() (avd.Manager, error) { return avd.Manager{SDK: sdk}, nil },
+		mumuList: func(context.Context) ([]mumu.Instance, error) {
+			return []mumu.Instance{{Index: "0", AndroidVersion: "15.0", Started: true}}, nil
+		},
+	}
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	ss, err := newServer(s).Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_mumu_migration_preflight", Arguments: map[string]any{"index": "0"}})
+	if err != nil || result.IsError {
+		t.Fatalf("preflight: %+v %v", result, err)
+	}
+	data, err := json.Marshal(result.StructuredContent)
+	if err != nil || !strings.Contains(string(data), `"matching_image_api":35`) || !strings.Contains(string(data), `"full_migration_supported":false`) || !strings.Contains(string(data), `"matching_image_file_present":false`) {
+		t.Fatalf("report: %s %v", data, err)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_mumu_migration_preflight", Arguments: map[string]any{"index": "all"}})
+	if err != nil || !result.IsError {
+		t.Fatal("invalid index accepted")
+	}
+}
 
 func TestGuestFrameToolKeepsPixelsPrivate(t *testing.T) {
 	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
@@ -135,7 +170,7 @@ func TestLiveMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 27 {
+	if len(list.Tools) != 28 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	call := func(name string, args any) *mcp.CallToolResult {

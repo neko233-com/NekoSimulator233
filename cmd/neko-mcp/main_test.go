@@ -42,7 +42,7 @@ func TestStdioExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 27 {
+	if len(tools.Tools) != 28 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_status", Arguments: map[string]any{}})

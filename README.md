@@ -26,6 +26,8 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 
 兼容模式：启动 MuMu 后运行程序，或将 `NEKO_MUMU_ROOT` 指向 MuMu 安装目录。已启动的 MuMu 实例可在自己的画面窗口打开；停止的实例先由 MuMu 启动，待 Android 启动后刷新。兼容模式的图形后端由 MuMu 配置决定。
 
+MuMu 实例旁的“检查迁移条件”会查询厂商报告的实例状态和 Android 版本，并检查对应 Android SDK 的 `system.img` 文件是否存在；本程序不直接读取用户数据盘，也不请求导出、启动或关闭实例。此检查不验证镜像完整性或数据兼容性，完整 MuMu 数据迁移仍未实现。
+
 ## 构建与安装
 
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
@@ -45,7 +47,7 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 ## Agent 控制
 
-安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。除 `neko_host_vulkan` 查询 Windows 宿主以外，这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
+安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_test_vulkan_guest_frame`、`neko_mumu_migration_preflight`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。`neko_host_vulkan` 查询 Windows 宿主，`neko_mumu_migration_preflight` 只读查询指定 MuMu 实例及本机 SDK 镜像文件；其余实例操作面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
 `neko_test_vulkan_guest_frame` 对已运行的所选独立实例截图，通过内存管道交给隔离子进程，在隐藏 Vulkan 窗口上传并回读比对；仅返回设备和验证结果，不返回或保存截图。可同时传入目标 `width` 和 `height`，测试保持比例、黑边填充的 CPU 最近邻缩放；未指定时使用原始尺寸。它不会启动实例。该诊断会分配画面和 GPU 资源，尚未完成真实实例端到端验证，不代表可见窗口已经接入 Vulkan 或证明游戏性能。
 

@@ -34,13 +34,20 @@ func New(root string) (Client, error) {
 }
 
 func (c Client) run(args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	return c.runContext(context.Background(), args...)
+}
+
+func (c Client) runContext(ctx context.Context, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.CLI, args...)
 	hideConsole(cmd)
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("MuMu 命令超时：%w", ctx.Err())
+		return nil, fmt.Errorf("MuMu 命令已取消或超时：%w", ctx.Err())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("MuMu 命令失败：%w", err)
@@ -59,7 +66,12 @@ func (c Client) run(args ...string) ([]byte, error) {
 }
 
 func (c Client) List() ([]Instance, error) {
-	out, err := c.run("info", "--vmindex", "all")
+	return c.ListContext(context.Background())
+}
+
+// ListContext reads current instance metadata without starting or changing it.
+func (c Client) ListContext(ctx context.Context) ([]Instance, error) {
+	out, err := c.runContext(ctx, "info", "--vmindex", "all")
 	if err != nil {
 		return nil, err
 	}

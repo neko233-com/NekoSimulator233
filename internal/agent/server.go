@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/migration"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
@@ -26,6 +27,7 @@ type Service struct {
 	presentProbe      func(context.Context, bool) (vulkan.DeviceInfo, error)
 	guestFrameProbe   func(context.Context, *image.RGBA, int, int) (vulkan.DeviceInfo, error)
 	captureProbeFrame func(context.Context) (*image.RGBA, error)
+	mumuList          migration.ListInstances
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -115,6 +117,9 @@ type UITapResult struct {
 type InstanceName struct {
 	Name string `json:"name" jsonschema:"Project-owned instance name"`
 }
+type MuMuPreflightRequest struct {
+	Index string `json:"index" jsonschema:"Numeric index of an existing MuMu instance"`
+}
 type CreateInstance struct {
 	Name string `json:"name" jsonschema:"New project-owned instance name"`
 	API  int    `json:"api,omitempty" jsonschema:"Android API level: 30, 34 or 35; omit to choose installed 35 or 34"`
@@ -145,6 +150,7 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect host Vulkan hardware; optionally test a hidden swapchain, submit a frame, or verify pixel readback in an isolated subprocess. Does not start an emulator or prove visible on-screen pixels."), s.hostVulkan)
 	mcp.AddTool(server, ro("neko_test_vulkan_guest_frame", "Capture one frame from the selected running Neko instance and verify Vulkan GPU readback in an isolated process. Screen pixels stay in memory and are not returned. Does not start an instance or prove visible presentation."), s.testVulkanGuestFrame)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
+	mcp.AddTool(server, ro("neko_mumu_migration_preflight", "Query MuMu instance metadata and check Android SDK system.img paths. Does not request a guest data export, start or stop instances, or migrate data; matching versions do not establish compatibility."), s.mumuMigrationPreflight)
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance using an installed Android image, with optional API 30 for 32-bit compatibility; never overwrites data and does not start it."), s.createInstance)
 	mcp.AddTool(server, rw("neko_select_instance", "Select an existing independent instance for subsequent tools in this MCP server process."), s.selectInstance)

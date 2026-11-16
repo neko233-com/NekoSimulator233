@@ -1,10 +1,20 @@
 package mumu
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestListContextHonorsCancellationBeforeProcess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := (Client{}).ListContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation: %v", err)
+	}
+}
 
 func TestParseInstances(t *testing.T) {
 	instances, err := parseInstances([]byte(`{"10":{"index":"10","name":"second"},"2":{"index":"2","name":"first","android_version":"15.0","is_android_started":true}}`))
