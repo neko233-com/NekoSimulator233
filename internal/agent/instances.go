@@ -19,14 +19,21 @@ func (s *Service) listInstances(ctx context.Context, _ *mcp.CallToolRequest, _ E
 	return nil, InstanceList{Instances: instances, Selected: m.Name}, err
 }
 
-func (s *Service) createInstance(ctx context.Context, _ *mcp.CallToolRequest, request CreateInstance) (*mcp.CallToolResult, Result, error) {
+func (s *Service) createInstance(ctx context.Context, req *mcp.CallToolRequest, request CreateInstance) (*mcp.CallToolResult, Result, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	m, err := s.manager()
+	s.mu.Unlock()
 	if err != nil {
 		return nil, Result{}, err
 	}
-	err = m.CreateInstanceAPI(ctx, request.Name, request.API)
+	var notify func(int)
+	if req != nil && req.Params != nil && req.Params.GetProgressToken() != nil {
+		token := req.Params.GetProgressToken()
+		notify = func(percent int) {
+			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "准备 Google Play 系统镜像"})
+		}
+	}
+	err = m.CreatePlayInstance(ctx, request.Name, request.API, notify)
 	return nil, Result{OK: err == nil}, err
 }
 

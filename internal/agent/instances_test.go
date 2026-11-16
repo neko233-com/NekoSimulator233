@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,18 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 	}
 	if err := os.WriteFile(legacyImage, []byte("test legacy"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	for _, api := range []int{30, 34} {
+		dir := filepath.Join(sdk, "system-images", fmt.Sprintf("android-%d", api), "google_apis_playstore", "x86_64")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		properties := fmt.Sprintf("Pkg.Revision=1\nAndroidVersion.ApiLevel=%d\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis_playstore\n", api)
+		for name, contents := range map[string]string{"system.img": "test image", "source.properties": properties, "package.xml": "<fake-package/>", "build.prop": "ro.build.version.incremental=12077443\n"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	manager := avd.Manager{SDK: sdk, Home: filepath.Join(root, "avd"), Name: avd.DefaultName}
 	server := New(func() (avd.Manager, error) { return manager, nil })

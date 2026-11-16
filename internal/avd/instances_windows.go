@@ -127,6 +127,10 @@ func (m Manager) CreateInstance(ctx context.Context, name string) error {
 // CreateInstanceAPI selects an installed image for a fresh instance. API 0
 // selects the default; it never changes the system image of an existing AVD.
 func (m Manager) CreateInstanceAPI(ctx context.Context, name string, api int) error {
+	return m.createInstanceWithPolicy(ctx, name, api, false)
+}
+
+func (m Manager) createInstanceWithPolicy(ctx context.Context, name string, api int, requirePlay bool) error {
 	if api != 0 && api != 30 && api != 34 && api != 35 {
 		return errors.New("不支持的 Android 系统版本")
 	}
@@ -139,6 +143,14 @@ func (m Manager) CreateInstanceAPI(ctx context.Context, name string, api int) er
 		return err
 	}
 	defer unlock()
+	if err := candidate.checkFreshInstance(name); err != nil {
+		return err
+	}
+	return candidate.ensureWithImagePolicy(api, requirePlay)
+}
+
+// Caller holds the lifecycle lock. It does not change any existing instance.
+func (m Manager) checkFreshInstance(name string) error {
 	for _, path := range []string{filepath.Join(m.Home, name+".ini"), filepath.Join(m.Home, name+".avd")} {
 		present, err := existsOrLink(path)
 		if err != nil {
@@ -148,10 +160,58 @@ func (m Manager) CreateInstanceAPI(ctx context.Context, name string, api int) er
 			return fmt.Errorf("实例 %s 已存在或不完整，不会覆盖", name)
 		}
 	}
-	if _, err := candidate.discover(); err == nil {
+	if _, err := m.discover(); err == nil {
 		return errors.New("同名实例正在运行，未创建")
 	} else if !errors.Is(err, errInstanceNotRunning) {
 		return err
 	}
-	return candidate.ensureWithAPI(api)
+	return nil
+}
+
+// CreatePlayInstance ensures a Play image is present before creating new
+// metadata. Image downloads occur outside the instance lifecycle lock.
+func (m Manager) CreatePlayInstance(ctx context.Context, name string, api int, notify func(int)) error {
+	return m.createPlayInstance(ctx, name, api, notify, func(ctx context.Context, api int, notify func(int)) error {
+		_, err := m.InstallPlayImage(ctx, api, notify)
+		return err
+	})
+}
+
+func (m Manager) createPlayInstance(ctx context.Context, name string, api int, notify func(int), install func(context.Context, int, func(int)) error) error {
+	if api != 0 && api != 30 && api != 34 && api != 35 {
+		return errors.New("不支持的 Android 系统版本")
+	}
+	candidate, err := m.WithName(name)
+	if err != nil {
+		return err
+	}
+	unlock, err := candidate.lockLifecycle(ctx, true)
+	if err != nil {
+		return err
+	}
+	err = candidate.checkFreshInstance(name)
+	unlock()
+	if err != nil {
+		return err
+	}
+	chosen := api
+	if chosen == 0 {
+		chosen = 34
+		for _, level := range []int{35, 34} {
+			if completePlayImage(filepath.Join(m.SDK, "system-images", fmt.Sprintf("android-%d", level), "google_apis_playstore", "x86_64"), level) {
+				chosen = level
+				break
+			}
+		}
+	}
+	dir := filepath.Join(m.SDK, "system-images", fmt.Sprintf("android-%d", chosen), "google_apis_playstore", "x86_64")
+	if !completePlayImage(dir, chosen) {
+		if err := install(ctx, chosen, notify); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.createInstanceWithPolicy(ctx, name, chosen, true)
 }

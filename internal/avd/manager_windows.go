@@ -100,6 +100,10 @@ func (m Manager) Ensure() error {
 // ensureWithAPI only chooses an image for a new AVD; existing metadata is
 // always preserved. API 0 keeps the existing Android 15/14 default policy.
 func (m Manager) ensureWithAPI(requestedAPI int) error {
+	return m.ensureWithImagePolicy(requestedAPI, false)
+}
+
+func (m Manager) ensureWithImagePolicy(requestedAPI int, requirePlay bool) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
@@ -138,7 +142,11 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 	if requestedAPI != 0 {
 		levels = []string{strconv.Itoa(requestedAPI)}
 	}
-	for _, tag := range []string{"google_apis_playstore", "google_apis"} {
+	tags := []string{"google_apis_playstore"}
+	if !requirePlay {
+		tags = append(tags, "google_apis")
+	}
+	for _, tag := range tags {
 		for _, level := range levels {
 			p := filepath.Join("system-images", "android-"+level, tag, "x86_64")
 			installed := exists(filepath.Join(m.SDK, p, "system.img"))
@@ -156,6 +164,9 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 		}
 	}
 	if imagePath == "" {
+		if requirePlay {
+			return errors.New("Google Play 系统镜像缺失或不完整，请先使用“安装 Google Play 镜像…”后重试")
+		}
 		if requestedAPI != 0 {
 			return fmt.Errorf("缺少 Android %d Google Play 或 Google APIs x86_64 系统镜像；请使用 SDK Manager 安装 system-images;android-%d;google_apis_playstore;x86_64", requestedAPI, requestedAPI)
 		}
@@ -485,7 +496,7 @@ func (m Manager) Start(ctx context.Context) (Instance, error) {
 		return Instance{}, err
 	}
 	defer unlock()
-	if err := m.Ensure(); err != nil {
+	if err := m.ensureWithImagePolicy(0, true); err != nil {
 		return Instance{}, err
 	}
 	if instance, err := m.discover(); err == nil {

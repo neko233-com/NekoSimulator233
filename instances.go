@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 )
@@ -107,23 +106,31 @@ func (a *app) createIndependent() {
 		a.message = err.Error()
 		return
 	}
-	a.busy = true
-	a.message = "正在创建独立实例…"
+	ctx, cancel := context.WithCancel(context.Background())
+	a.busy, a.sdkCancel = true, cancel
+	a.sdkJob++
+	job := a.sdkJob
+	a.message = "正在准备 Google Play 镜像并创建独立实例…"
 	go func() {
+		defer cancel()
 		manager, err := avd.DiscoverManager()
 		var items []avd.InstanceSummary
 		created := false
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err = manager.CreateInstanceAPI(ctx, name, api)
+			err = manager.CreatePlayInstance(ctx, name, api, func(percent int) {
+				a.window.Update(func() {
+					if a.sdkJob == job && a.sdkCancel != nil && ctx.Err() == nil {
+						a.message = fmt.Sprintf("正在准备 Google Play 镜像：%d%%", percent)
+					}
+				})
+			})
 			if err == nil {
 				created = true
 				items, err = manager.ListInstances(ctx)
 			}
-			cancel()
 		}
 		a.window.Update(func() {
-			a.busy = false
+			a.busy, a.sdkCancel = false, nil
 			if created {
 				if err != nil {
 					items = append(append([]avd.InstanceSummary(nil), a.available...), avd.InstanceSummary{Name: name, State: "stopped"})
@@ -138,6 +145,10 @@ func (a *app) createIndependent() {
 				}
 			} else if err != nil {
 				a.message = "创建实例失败：" + err.Error()
+			}
+			if a.closeAfterSDK {
+				a.closeAfterSDK = false
+				a.window.Close()
 			}
 		})
 	}()

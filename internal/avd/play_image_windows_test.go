@@ -4,12 +4,102 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCreatePlayInstanceInstallsMissingImageAndNeverFallsBack(t *testing.T) {
+	m := backupFixture(t)
+	installed := 0
+	install := func(ctx context.Context, api int, notify func(int)) error {
+		installed++
+		if api != 34 {
+			t.Fatalf("unexpected default API %d", api)
+		}
+		addTestImage(t, m.SDK, "google_apis_playstore", "12077443")
+		if notify != nil {
+			notify(75)
+		}
+		return nil
+	}
+	progress := 0
+	if err := m.createPlayInstance(context.Background(), "WithPlay", 0, func(n int) { progress = n }, install); err != nil {
+		t.Fatal(err)
+	}
+	config, err := parseINI(filepath.Join(m.Home, "WithPlay.avd", "config.ini"))
+	if err != nil || config["tag.id"] != "google_apis_playstore" || installed != 1 || progress != 75 {
+		t.Fatalf("wrong create result: %v %v", config, err)
+	}
+	if err := m.createPlayInstance(context.Background(), "SecondPlay", 0, nil, func(context.Context, int, func(int)) error { t.Fatal("installed image downloaded again"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.createPlayInstance(context.Background(), "WithPlay", 0, nil, func(context.Context, int, func(int)) error { t.Fatal("existing instance caused download"); return nil }); err == nil {
+		t.Fatal("existing instance accepted")
+	}
+}
+
+func TestCreatePlayInstancePreservesStateOnInstallFailureAndRace(t *testing.T) {
+	m := backupFixture(t)
+	if err := m.createPlayInstance(context.Background(), "Offline", 0, nil, func(context.Context, int, func(int)) error { return errors.New("offline") }); err == nil {
+		t.Fatal("installation failure hidden")
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "Offline.avd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("instance created despite failed install: %v", err)
+	}
+	if err := m.createPlayInstance(context.Background(), "Incomplete", 0, nil, func(context.Context, int, func(int)) error { return nil }); err == nil {
+		t.Fatal("incomplete Play installation silently fell back")
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "Incomplete.avd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("instance created without a Play image: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	err := m.createPlayInstance(ctx, "Canceled", 0, nil, func(context.Context, int, func(int)) error {
+		addTestImage(t, m.SDK, "google_apis_playstore", "12077443")
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation not preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "Canceled.avd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled instance was created: %v", err)
+	}
+	// Force installation again and race an unrelated instance directory while downloading.
+	other := backupFixture(t)
+	err = other.createPlayInstance(context.Background(), "Racing", 0, nil, func(context.Context, int, func(int)) error {
+		addTestImage(t, other.SDK, "google_apis_playstore", "12077443")
+		dir := filepath.Join(other.Home, "Racing.avd")
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		return os.WriteFile(filepath.Join(dir, "keep"), []byte("user"), 0600)
+	})
+	if err == nil {
+		t.Fatal("racing instance was overwritten")
+	}
+	data, readErr := os.ReadFile(filepath.Join(other.Home, "Racing.avd", "keep"))
+	if readErr != nil || string(data) != "user" {
+		t.Fatal("racing directory was modified")
+	}
+}
+
+func TestStartDoesNotCreateGoogleAPIsFallbackWhenPlayImageMissing(t *testing.T) {
+	m := backupFixture(t)
+	candidate, err := m.WithName("StartNew")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "Google Play") {
+		t.Fatalf("start did not require a Play image: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "StartNew.avd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fallback instance created: %v", err)
+	}
+}
 
 func addTestImage(t *testing.T, sdk, tag, build string) string {
 	t.Helper()
