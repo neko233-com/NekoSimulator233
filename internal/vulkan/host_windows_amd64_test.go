@@ -32,12 +32,16 @@ func TestVulkanWin64ABI(t *testing.T) {
 }
 
 func TestDeviceSelectionAndQueueFamily(t *testing.T) {
-	family, ok := graphicsFamily([]queueFamilyProperties{{Flags: vkGraphics, Count: 0}, {Flags: 0, Count: 1}, {Flags: vkGraphics, Count: 1}})
+	family, ok := graphicsFamily([]queueFamilyProperties{{Flags: vkGraphics, Count: 0}, {Flags: 0, Count: 1}, {Flags: vkGraphics, Count: 1}}, func(uint32) bool { return true })
 	if !ok || family != 2 {
 		t.Fatalf("graphics family %d %v", family, ok)
 	}
-	if _, ok = graphicsFamily([]queueFamilyProperties{{Flags: vkGraphics}}); ok {
+	if _, ok = graphicsFamily([]queueFamilyProperties{{Flags: vkGraphics}}, func(uint32) bool { return true }); ok {
 		t.Fatal("accepted an empty queue family")
+	}
+	family, ok = graphicsFamily([]queueFamilyProperties{{Flags: vkGraphics, Count: 1}, {Flags: vkGraphics, Count: 1}}, func(index uint32) bool { return index == 1 })
+	if !ok || family != 1 {
+		t.Fatal("selected a queue that cannot present to Win32")
 	}
 	input := []candidate{{physical: 1, info: DeviceInfo{DeviceType: vkIntegratedGPU}}, {physical: 2, info: DeviceInfo{DeviceType: vkDiscreteGPU}}}
 	chosen, ok := chooseDevice(input)

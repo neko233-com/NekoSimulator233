@@ -81,16 +81,17 @@ type physicalProperties struct {
 }
 
 type DeviceInfo struct {
-	Name                   string `json:"name"`
-	APIVersion             uint32 `json:"api_version"`
-	DriverVersion          uint32 `json:"driver_version"`
-	VendorID               uint32 `json:"vendor_id"`
-	DeviceID               uint32 `json:"device_id"`
-	DeviceType             uint32 `json:"device_type"`
-	GraphicsQueueFamily    uint32 `json:"graphics_queue_family"`
-	Swapchain              bool   `json:"swapchain"`
-	ExternalMemoryWin32    bool   `json:"external_memory_win32"`
-	ExternalSemaphoreWin32 bool   `json:"external_semaphore_win32"`
+	Name                   string         `json:"name"`
+	APIVersion             uint32         `json:"api_version"`
+	DriverVersion          uint32         `json:"driver_version"`
+	VendorID               uint32         `json:"vendor_id"`
+	DeviceID               uint32         `json:"device_id"`
+	DeviceType             uint32         `json:"device_type"`
+	GraphicsQueueFamily    uint32         `json:"graphics_queue_family"`
+	Swapchain              bool           `json:"swapchain"`
+	ExternalMemoryWin32    bool           `json:"external_memory_win32"`
+	ExternalSemaphoreWin32 bool           `json:"external_semaphore_win32"`
+	TestSurface            *SwapchainInfo `json:"test_surface,omitempty"`
 }
 
 // Host owns the loader, instance, logical device and queue in that order.
@@ -99,7 +100,9 @@ type Host struct {
 	mu                                sync.Mutex
 	dll                               windows.Handle
 	instance, physical, device, queue uintptr
+	getInstanceProcAddr               uintptr
 	destroyInstance, destroyDevice    uintptr
+	swapchains                        map[*Swapchain]struct{}
 	info                              DeviceInfo
 }
 
@@ -155,6 +158,7 @@ func OpenHost() (_ *Host, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("获取 Vulkan 入口失败：%w", err)
 	}
+	h.getInstanceProcAddr = get
 	// Resolve cleanup before allocating an instance, so every later failure
 	// has a valid destroy function even if dispatch lookup fails.
 	h.destroyInstance, err = windows.GetProcAddress(h.dll, "vkDestroyInstance")
@@ -212,6 +216,10 @@ func OpenHost() (_ *Host, err error) {
 	if err != nil {
 		return nil, err
 	}
+	win32Present, err := getInstanceProc(get, h.instance, "vkGetPhysicalDeviceWin32PresentationSupportKHR")
+	if err != nil {
+		return nil, err
+	}
 	extensions, err := getInstanceProc(get, h.instance, "vkEnumerateDeviceExtensionProperties")
 	if err != nil {
 		return nil, err
@@ -244,7 +252,10 @@ func OpenHost() (_ *Host, err error) {
 		if e != nil {
 			return nil, e
 		}
-		family, ok := graphicsFamily(families)
+		family, ok := graphicsFamily(families, func(index uint32) bool {
+			supported, err := call(win32Present, physical, uintptr(index))
+			return err == nil && supported != 0
+		})
 		if !ok {
 			continue
 		}
@@ -296,12 +307,21 @@ func OpenHost() (_ *Host, err error) {
 
 func (h *Host) Info() DeviceInfo { h.mu.Lock(); defer h.mu.Unlock(); return h.info }
 
-func InspectHost() (DeviceInfo, error) {
+func InspectHost(testSurface bool) (DeviceInfo, error) {
 	h, err := OpenHost()
 	if err != nil {
 		return DeviceInfo{}, err
 	}
 	info := h.Info()
+	if testSurface {
+		var surface SwapchainInfo
+		surface, err = inspectHiddenSurface(h)
+		if err != nil {
+			_ = h.Close()
+			return DeviceInfo{}, err
+		}
+		info.TestSurface = &surface
+	}
 	if err := h.Close(); err != nil {
 		return DeviceInfo{}, err
 	}
@@ -311,6 +331,9 @@ func InspectHost() (DeviceInfo, error) {
 func (h *Host) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	for swapchain := range h.swapchains {
+		swapchain.closeLocked()
+	}
 	if h.device != 0 && h.destroyDevice != 0 {
 		_, _ = call(h.destroyDevice, h.device, 0)
 		h.device = 0

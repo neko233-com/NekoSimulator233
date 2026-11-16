@@ -21,13 +21,16 @@ type Service struct {
 	mu               sync.Mutex
 	selected         string
 	controlReadiness avd.ControlReadiness
-	hostProbe        func() (vulkan.DeviceInfo, error)
+	hostProbe        func(bool) (vulkan.DeviceInfo, error)
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
 var Version = "0.0.0"
 
 type Empty struct{}
+type HostVulkanRequest struct {
+	TestSurface bool `json:"test_surface,omitempty" jsonschema:"Create and destroy a small hidden test window and Vulkan swapchain"`
+}
 type State struct {
 	Ready           bool   `json:"ready"`
 	Name            string `json:"name,omitempty"`
@@ -129,7 +132,7 @@ func newServer(s *Service) *mcp.Server {
 	}
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
-	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect the Windows host Vulkan hardware by briefly creating and destroying a logical graphics device. Does not start an emulator or prove frame presentation."), s.hostVulkan)
+	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect Windows host Vulkan hardware by briefly creating and destroying a logical graphics device; optionally test a hidden window swapchain. Does not start an emulator or prove frame presentation."), s.hostVulkan)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance using an installed Android image, with optional API 30 for 32-bit compatibility; never overwrites data and does not start it."), s.createInstance)
@@ -157,7 +160,7 @@ func newServer(s *Service) *mcp.Server {
 	return server
 }
 
-func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
+func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, request HostVulkanRequest) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, vulkan.DeviceInfo{}, err
 	}
@@ -170,7 +173,7 @@ func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, _ Empt
 	if probe == nil {
 		probe = vulkan.InspectHost
 	}
-	info, err := probe()
+	info, err := probe(request.TestSurface)
 	if err != nil {
 		return nil, vulkan.DeviceInfo{}, err
 	}

@@ -26,9 +26,9 @@ func chooseDevice(candidates []candidate) (candidate, bool) {
 	}
 	return candidate{}, false
 }
-func graphicsFamily(families []queueFamilyProperties) (uint32, bool) {
+func graphicsFamily(families []queueFamilyProperties, supportsPresent func(uint32) bool) (uint32, bool) {
 	for i, q := range families {
-		if q.Count != 0 && q.Flags&vkGraphics != 0 {
+		if q.Count != 0 && q.Flags&vkGraphics != 0 && supportsPresent(uint32(i)) {
 			return uint32(i), true
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"testing"
@@ -33,5 +34,25 @@ func TestStdioExecutable(t *testing.T) {
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_status", Arguments: map[string]any{}})
 	if err != nil || result.IsError {
 		t.Fatalf("status failed: %v", err)
+	}
+	if os.Getenv("NEKO_TEST_HOST_VULKAN") == "1" {
+		result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{"test_surface": true}})
+		if err != nil || result.IsError {
+			t.Fatalf("host Vulkan surface failed: %v", err)
+		}
+		data, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Surface struct {
+				Width      int `json:"width"`
+				Height     int `json:"height"`
+				ImageCount int `json:"image_count"`
+			} `json:"test_surface"`
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded.Surface.Width == 0 || decoded.Surface.Height == 0 || decoded.Surface.ImageCount == 0 {
+			t.Fatalf("invalid Vulkan surface response %s: %v", data, err)
+		}
 	}
 }

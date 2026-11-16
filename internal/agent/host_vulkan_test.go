@@ -16,8 +16,11 @@ import (
 
 func TestHostVulkanMCP(t *testing.T) {
 	called := 0
-	s := &Service{hostProbe: func() (vulkan.DeviceInfo, error) {
+	s := &Service{hostProbe: func(testSurface bool) (vulkan.DeviceInfo, error) {
 		called++
+		if !testSurface {
+			t.Error("surface flag was not forwarded")
+		}
 		return vulkan.DeviceInfo{Name: "synthetic GPU", Swapchain: true, GraphicsQueueFamily: 3}, nil
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -33,7 +36,7 @@ func TestHostVulkanMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
-	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{}})
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{"test_surface": true}})
 	if err != nil || result.IsError || called != 1 {
 		t.Fatalf("host probe call: %v, calls=%d", err, called)
 	}
@@ -43,7 +46,7 @@ func TestHostVulkanMCP(t *testing.T) {
 	}
 	canceled, stop := context.WithCancel(context.Background())
 	stop()
-	if _, _, err := s.hostVulkan(canceled, nil, Empty{}); !errors.Is(err, context.Canceled) || called != 1 {
+	if _, _, err := s.hostVulkan(canceled, nil, HostVulkanRequest{}); !errors.Is(err, context.Canceled) || called != 1 {
 		t.Fatalf("canceled call invoked probe: %v", err)
 	}
 }

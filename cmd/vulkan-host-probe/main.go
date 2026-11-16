@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 
@@ -12,13 +13,10 @@ import (
 )
 
 func main() {
-	h, err := vulkan.OpenHost()
+	testSurface := flag.Bool("surface", false, "create and destroy an isolated hidden test swapchain")
+	flag.Parse()
+	info, err := vulkan.InspectHost(*testSurface)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	info := h.Info()
-	if err = h.Close(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
