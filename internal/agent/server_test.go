@@ -9,8 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +69,7 @@ func TestLiveMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 15 {
+	if len(list.Tools) != 17 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	call := func(name string, args any) *mcp.CallToolResult {
@@ -236,7 +234,6 @@ func TestLiveMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	var focusReady bool
-	searchBounds := regexp.MustCompile(`resource-id="com\.android\.settings:id/search_action_bar_title"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"`)
 	for attempt := 0; attempt < 8; attempt++ {
 		out, err := exec.Command(adb, "-s", "emulator-5578", "exec-out", "uiautomator", "dump", "/dev/tty").Output()
 		if err != nil {
@@ -247,14 +244,14 @@ func TestLiveMCP(t *testing.T) {
 			focusReady = true
 			break
 		}
-		if parts := searchBounds.FindStringSubmatch(text); len(parts) == 5 {
-			x1, _ := strconv.Atoi(parts[1])
-			y1, _ := strconv.Atoi(parts[2])
-			x2, _ := strconv.Atoi(parts[3])
-			y2, _ := strconv.Atoi(parts[4])
-			if err := exec.Command(adb, "-s", "emulator-5578", "shell", "input", "tap", strconv.Itoa((x1+x2)/2), strconv.Itoa((y1+y2)/2)).Run(); err != nil {
-				t.Fatal(err)
+		if strings.Contains(text, `resource-id="com.android.settings:id/search_action_bar_title"`) {
+			selector := map[string]any{"resource_id": "com.android.settings:id/search_action_bar_title"}
+			found := call("neko_find_ui", selector)
+			encoded, err := json.Marshal(found.StructuredContent)
+			if err != nil || !strings.Contains(string(encoded), "com.android.settings:id/search_action_bar_title") {
+				t.Fatalf("UI selector did not find Settings search: %s %v", encoded, err)
 			}
+			call("neko_tap_ui", selector)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
