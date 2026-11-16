@@ -7,6 +7,8 @@ import (
 	"image"
 	"testing"
 	"unsafe"
+
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 )
 
 func TestStagingWin64ABI(t *testing.T) {
@@ -23,6 +25,36 @@ func TestStagingWin64ABI(t *testing.T) {
 	} {
 		if c.got != c.want {
 			t.Errorf("%s: got %d want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestFittedFrameMatchesPreviewInputCoordinates(t *testing.T) {
+	for _, dims := range [][4]int{{4, 2, 5, 5}, {2, 4, 7, 3}, {3, 3, 2, 2}, {1, 5, 8, 7}} {
+		sw, sh, w, h := dims[0], dims[1], dims[2], dims[3]
+		frame := image.NewRGBA(image.Rect(0, 0, sw, sh))
+		for y := 0; y < sh; y++ {
+			for x := 0; x < sw; x++ {
+				i := y*frame.Stride + x*4
+				frame.Pix[i], frame.Pix[i+1], frame.Pix[i+3] = byte(x+1), byte(y+1), 255
+			}
+		}
+		buf := make([]byte, w*h*4)
+		if err := fittedFrame(buf, frame, extent2D{uint32(w), uint32(h)}, vkFormatRGBA8, false); err != nil {
+			t.Fatal(err)
+		}
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				e := previewinput.Event{Kind: "down", X: x, Y: y, Width: w, Height: h, FrameWidth: sw, FrameHeight: sh}
+				sx, sy, ok := e.Point(false)
+				i := (y*w + x) * 4
+				if ok && (buf[i] != byte(sx+1) || buf[i+1] != byte(sy+1)) {
+					t.Fatalf("frame %v point %d,%d mapped to %d,%d", dims, x, y, sx, sy)
+				}
+				if !ok && (buf[i] != 0 || buf[i+1] != 0 || buf[i+2] != 0 || buf[i+3] != 255) {
+					t.Fatalf("frame %v bar %d,%d", dims, x, y)
+				}
+			}
 		}
 	}
 }

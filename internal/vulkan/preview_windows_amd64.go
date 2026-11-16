@@ -3,6 +3,7 @@
 package vulkan
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -13,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/neko233-com/NekoSimulator233/internal/frameprobe"
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 	"golang.org/x/sys/windows"
 )
 
@@ -38,16 +40,78 @@ type previewFrame struct {
 // RunPreview owns a visible experimental window in a disposable process.
 // It reads framed pixels only from input and never opens an Android instance.
 // Callers must terminate this process if the driver hangs during cleanup.
-func RunPreview(input io.Reader) (err error) {
+func RunPreview(input io.Reader, output io.Writer) (err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	var closing atomic.Bool
+	events := make(chan previewinput.Event, 64)
+	eventDone := make(chan struct{})
+	defer close(eventDone)
+	go func() {
+		enc := json.NewEncoder(output)
+		for {
+			select {
+			case event := <-events:
+				if enc.Encode(event) != nil {
+					closing.Store(true)
+					return
+				}
+			case <-eventDone:
+				return
+			}
+		}
+	}()
+	emit := func(event previewinput.Event) {
+		select {
+		case events <- event:
+		default:
+			if event.Kind != "move" {
+				closing.Store(true)
+			}
+		}
+	}
+	var displayedWidth, displayedHeight, frameWidth, frameHeight int
+	setCapture := user32.NewProc("SetCapture")
+	releaseCapture := user32.NewProc("ReleaseCapture")
 	defWindowProc := user32.NewProc("DefWindowProcW")
 	wndProc := windows.NewCallback(func(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
-		if msg == 0x0010 {
+		switch msg {
+		case 0x0010:
 			closing.Store(true)
 			return 0
-		} // WM_CLOSE
+		case 0x0008: // WM_KILLFOCUS
+			emit(previewinput.Event{Kind: "release"})
+		case 0x0215: // WM_CAPTURECHANGED
+			emit(previewinput.Event{Kind: "up"})
+		case 0x0202: // WM_LBUTTONUP
+			emit(previewinput.Event{Kind: "up"})
+			releaseCapture.Call()
+			return 0
+		case 0x0201, 0x0200: // WM_LBUTTONDOWN / WM_MOUSEMOVE
+			if msg == 0x0200 && wp&1 == 0 {
+				break
+			}
+			var rect winRect
+			ok, _, _ := getClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+			w, h := int(rect.Right-rect.Left), int(rect.Bottom-rect.Top)
+			if ok == 0 || w != displayedWidth || h != displayedHeight || frameWidth == 0 || frameHeight == 0 {
+				emit(previewinput.Event{Kind: "up"})
+				releaseCapture.Call()
+				return 0
+			}
+			kind := "move"
+			if msg == 0x0201 {
+				kind = "down"
+			}
+			e := previewinput.Event{Kind: kind, X: int(int16(lp & 0xffff)), Y: int(int16((lp >> 16) & 0xffff)), Width: w, Height: h, FrameWidth: frameWidth, FrameHeight: frameHeight}
+			if e.Valid() {
+				if kind == "down" {
+					setCapture.Call(hwnd)
+				}
+				emit(e)
+			}
+			return 0
+		}
 		ret, _, _ := defWindowProc.Call(hwnd, uintptr(msg), wp, lp)
 		return ret
 	})
@@ -138,6 +202,12 @@ func RunPreview(input io.Reader) (err error) {
 				if err := renderer.PresentFittedRGBA(next.frame, false); err != nil {
 					return err
 				}
+				info, infoErr := renderer.Info()
+				if infoErr != nil {
+					return infoErr
+				}
+				displayedWidth, displayedHeight = int(info.Width), int(info.Height)
+				frameWidth, frameHeight = next.frame.Bounds().Dx(), next.frame.Bounds().Dy()
 			}
 			select {
 			case returned <- next.frame:

@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 )
 
 type pointerEvent struct {
@@ -49,6 +50,7 @@ type viewer struct {
 	previewError  string
 	preview       *vulkanPreview
 	held          bool
+	previewHeld   bool
 	keys          map[uint16]bool
 	screen        ui.Handle
 	events        chan pointerEvent
@@ -147,7 +149,7 @@ func (v *viewer) run() {
 			case <-ctx.Done():
 			}
 		}()
-		preview, err := startVulkanPreview(ctx)
+		preview, err := startVulkanPreview(ctx, func(event previewinput.Event) { v.deliverPreviewInput(ctx, event) })
 		if err != nil {
 			v.reportPreview(err)
 		} else {
@@ -457,11 +459,72 @@ func (v *viewer) releaseHostKeys() {
 }
 
 func (v *viewer) releaseHostInput() {
+	v.previewHeld = false
 	if v.held {
 		v.held = false
 		v.enqueue(pointerEvent{kind: pointerUp})
 	}
 	v.releaseHostKeys()
+}
+
+func (v *viewer) deliverPreviewInput(ctx context.Context, event previewinput.Event) {
+	ack := make(chan struct{})
+	v.win.Update(func() {
+		defer close(ack)
+		select {
+		case <-v.done:
+			return
+		default:
+		}
+		v.applyPreviewInput(event)
+	})
+	select {
+	case <-ack:
+	case <-ctx.Done():
+	case <-v.done:
+	}
+}
+
+// applyPreviewInput runs on the UI thread, sharing held state with the main
+// viewer so focus changes, resizing and queue overflow release touches safely.
+func (v *viewer) applyPreviewInput(event previewinput.Event) {
+	if !event.Valid() {
+		return
+	}
+	release := func() {
+		if v.previewHeld {
+			v.previewHeld = false
+			if v.held {
+				v.held = false
+				v.enqueue(pointerEvent{kind: pointerUp})
+			}
+		}
+	}
+	if event.Kind == "up" || event.Kind == "release" {
+		release()
+		return
+	}
+	if v.editing != 0 || event.FrameWidth != v.width || event.FrameHeight != v.height {
+		release()
+		return
+	}
+	if event.Kind == "down" {
+		x, y, ok := event.Point(false)
+		if !ok {
+			return
+		}
+		if v.held {
+			v.held = false
+			v.enqueue(pointerEvent{kind: pointerUp})
+		}
+		v.inputError = ""
+		v.held, v.previewHeld = true, true
+		v.enqueue(pointerEvent{kind: pointerDown, x: x, y: y})
+	} else if event.Kind == "move" && v.previewHeld && v.held {
+		if x, y, ok := event.Point(true); ok {
+			v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
+		}
+	}
 }
 
 func (v *viewer) setFrameSize(width, height int) {
@@ -731,6 +794,13 @@ func (v *viewer) view(c *ui.Context) {
 			case ui.InputPointerDown:
 				if ev.Button != 0 {
 					return false
+				}
+				if v.previewHeld {
+					v.previewHeld = false
+					if v.held {
+						v.held = false
+						v.enqueue(pointerEvent{kind: pointerUp})
+					}
 				}
 				x, y, ok := fitPoint(ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, false)
 				if !ok {

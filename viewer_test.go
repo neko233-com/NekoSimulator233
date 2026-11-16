@@ -11,7 +11,41 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 )
+
+func TestPreviewMouseMappingAndRelease(t *testing.T) {
+	v := &viewer{width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{})}
+	e := previewinput.Event{Kind: "down", Width: 4, Height: 4, FrameWidth: 4, FrameHeight: 2, X: 2, Y: 0}
+	v.applyPreviewInput(e)
+	if len(v.events) != 0 {
+		t.Fatal("bar accepted")
+	}
+	e.Y = 1
+	v.applyPreviewInput(e)
+	down := <-v.events
+	if down.kind != pointerDown || down.x != 2 || down.y != 0 || !v.previewHeld {
+		t.Fatalf("down: %+v", down)
+	}
+	e.Kind, e.X, e.Y = "move", -10, 10
+	v.applyPreviewInput(e)
+	move := <-v.events
+	if move.kind != pointerMove || move.x != 0 || move.y != 1 {
+		t.Fatalf("move: %+v", move)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "release"})
+	if up := <-v.events; up.kind != pointerUp || v.held || v.previewHeld {
+		t.Fatal("focus loss did not release")
+	}
+	e.Kind, e.X, e.Y = "down", 2, 1
+	v.applyPreviewInput(e)
+	<-v.events
+	e.Kind, e.FrameWidth = "move", 8
+	v.applyPreviewInput(e)
+	if up := <-v.events; up.kind != pointerUp || v.held {
+		t.Fatal("changed frame did not release")
+	}
+}
 
 type slowCaptureSession struct {
 	capturing chan struct{}

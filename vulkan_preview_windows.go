@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/NekoSimulator233/internal/frameprobe"
+	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 )
 
 type previewOutput struct{ bytes.Buffer }
@@ -35,7 +38,7 @@ type vulkanPreview struct {
 	buffer [32 * 1024]byte
 }
 
-func startVulkanPreview(ctx context.Context) (*vulkanPreview, error) {
+func startVulkanPreview(ctx context.Context, onEvent func(previewinput.Event)) (*vulkanPreview, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -48,6 +51,12 @@ func startVulkanPreview(ctx context.Context) (*vulkanPreview, error) {
 		cancel()
 		return nil, err
 	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		_ = input.Close()
+		return nil, err
+	}
 	output := &previewOutput{}
 	cmd.Stderr = output
 	if err = cmd.Start(); err != nil {
@@ -56,7 +65,31 @@ func startVulkanPreview(ctx context.Context) (*vulkanPreview, error) {
 		return nil, err
 	}
 	p := &vulkanPreview{input: input, cancel: cancel, done: make(chan error, 1), stderr: output}
-	go func() { p.done <- cmd.Wait(); close(p.done) }()
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer func() {
+			if onEvent != nil {
+				onEvent(previewinput.Event{Kind: "release"})
+			}
+		}()
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 1024), 4096)
+		for scanner.Scan() {
+			var event previewinput.Event
+			if json.Unmarshal(scanner.Bytes(), &event) != nil || !event.Valid() {
+				cancel()
+				return
+			}
+			if onEvent != nil {
+				onEvent(event)
+			}
+		}
+		if scanner.Err() != nil {
+			cancel()
+		}
+	}()
+	go func() { <-readerDone; p.done <- cmd.Wait(); close(p.done) }()
 	return p, nil
 }
 

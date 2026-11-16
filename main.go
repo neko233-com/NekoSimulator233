@@ -392,7 +392,7 @@ func prepareUpdate() (bool, string) {
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--vulkan-preview-worker" {
-		if err := vulkan.RunPreview(os.Stdin); err != nil {
+		if err := vulkan.RunPreview(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
