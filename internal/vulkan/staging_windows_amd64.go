@@ -92,9 +92,35 @@ type stagingBuffer struct {
 	procs          stagingProcs
 	buffer, memory uint64
 	size           int
+	verify         bool
+	mapped         unsafe.Pointer
+}
+
+func (b *stagingBuffer) compatible(size int, verify bool) bool {
+	return b != nil && b.buffer != 0 && b.memory != 0 && b.mapped != nil && b.size == size && (!verify || b.verify)
+}
+
+// The previous command pool has already been reset before this is called,
+// so no executable or pending command buffer still references an old buffer.
+func (op *presentResources) ensureStaging(h *Host, size int, verify bool, create func(*stagingBuffer, *Host, int, bool) error) error {
+	if op.staging != nil && !op.staging.compatible(size, verify) {
+		op.staging.release(h)
+		op.staging = nil
+	}
+	if op.staging == nil {
+		op.staging = &stagingBuffer{}
+		if err := create(op.staging, h, size, verify); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *stagingBuffer) release(h *Host) {
+	if b.mapped != nil {
+		_, _ = call(b.procs.unmapMemory, h.device, uintptr(b.memory))
+		b.mapped = nil
+	}
 	if b.buffer != 0 {
 		_, _ = call(b.procs.destroyBuffer, h.device, uintptr(b.buffer), 0)
 		b.buffer = 0
@@ -124,6 +150,7 @@ func (b *stagingBuffer) create(h *Host, size int, verify bool) error {
 	}
 	b.procs = p
 	b.size = size
+	b.verify = verify
 	usage := uint32(vkBufferTransferSrc)
 	if verify {
 		usage |= vkBufferTransferDst
@@ -175,23 +202,30 @@ func (b *stagingBuffer) create(h *Host, size int, verify bool) error {
 	if e != nil {
 		return e
 	}
-	return result("vkBindBufferMemory", r)
+	if e = result("vkBindBufferMemory", r); e != nil {
+		return e
+	}
+	var mapped unsafe.Pointer
+	r, e = call(p.mapMemory, h.device, uintptr(memory), 0, uintptr(size), 0, uintptr(unsafe.Pointer(&mapped)))
+	if e != nil {
+		return e
+	}
+	if e = result("vkMapMemory", r); e != nil {
+		return e
+	}
+	if mapped == nil {
+		_, _ = call(p.unmapMemory, h.device, uintptr(memory))
+		return errors.New("Vulkan 返回空映射")
+	}
+	b.mapped = mapped
+	return nil
 }
 
 func (b *stagingBuffer) withMapped(h *Host, fn func([]byte) error) error {
-	var mapped unsafe.Pointer
-	r, err := call(b.procs.mapMemory, h.device, uintptr(b.memory), 0, uintptr(b.size), 0, uintptr(unsafe.Pointer(&mapped)))
-	if err != nil {
-		return err
+	if b.mapped == nil {
+		return errors.New("Vulkan 缓冲区未映射")
 	}
-	if err = result("vkMapMemory", r); err != nil {
-		return err
-	}
-	defer call(b.procs.unmapMemory, h.device, uintptr(b.memory))
-	if mapped == nil {
-		return errors.New("Vulkan 返回空映射")
-	}
-	return fn(unsafe.Slice((*byte)(mapped), b.size))
+	return fn(unsafe.Slice((*byte)(b.mapped), b.size))
 }
 
 func frameSize(frame *image.RGBA, extent extent2D) (int, error) {
@@ -259,8 +293,7 @@ func (s *Swapchain) PresentRGBA(frame *image.RGBA, verify bool) error {
 			return nil
 		},
 		prepare: func(h *Host, op *presentResources) error {
-			op.staging = &stagingBuffer{}
-			if err := op.staging.create(h, size, verify); err != nil {
+			if err := op.ensureStaging(h, size, verify, (*stagingBuffer).create); err != nil {
 				return err
 			}
 			return op.staging.withMapped(h, func(data []byte) error { return frameBytes(data, frame, s.format.Format, false) })

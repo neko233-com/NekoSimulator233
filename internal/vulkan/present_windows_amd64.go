@@ -96,8 +96,10 @@ type presentInfo struct {
 
 type presentProcs struct {
 	createFence, destroyFence, fenceStatus, waitFences                  uintptr
+	resetFences                                                         uintptr
 	createSemaphore, destroySemaphore                                   uintptr
 	createPool, destroyPool, allocateCommands, beginCommand, endCommand uintptr
+	resetPool                                                           uintptr
 	barrier, clear, acquire, submit, present                            uintptr
 }
 
@@ -107,9 +109,9 @@ func (h *Host) presentProcs() (presentProcs, error) {
 		name string
 		dst  *uintptr
 	}{
-		{"vkCreateFence", &p.createFence}, {"vkDestroyFence", &p.destroyFence}, {"vkGetFenceStatus", &p.fenceStatus}, {"vkWaitForFences", &p.waitFences},
+		{"vkCreateFence", &p.createFence}, {"vkDestroyFence", &p.destroyFence}, {"vkGetFenceStatus", &p.fenceStatus}, {"vkWaitForFences", &p.waitFences}, {"vkResetFences", &p.resetFences},
 		{"vkCreateSemaphore", &p.createSemaphore}, {"vkDestroySemaphore", &p.destroySemaphore},
-		{"vkCreateCommandPool", &p.createPool}, {"vkDestroyCommandPool", &p.destroyPool}, {"vkAllocateCommandBuffers", &p.allocateCommands}, {"vkBeginCommandBuffer", &p.beginCommand}, {"vkEndCommandBuffer", &p.endCommand},
+		{"vkCreateCommandPool", &p.createPool}, {"vkDestroyCommandPool", &p.destroyPool}, {"vkAllocateCommandBuffers", &p.allocateCommands}, {"vkBeginCommandBuffer", &p.beginCommand}, {"vkEndCommandBuffer", &p.endCommand}, {"vkResetCommandPool", &p.resetPool},
 		{"vkCmdPipelineBarrier", &p.barrier}, {"vkCmdClearColorImage", &p.clear}, {"vkAcquireNextImageKHR", &p.acquire}, {"vkQueueSubmit", &p.submit}, {"vkQueuePresentKHR", &p.present},
 	} {
 		var err error
@@ -124,6 +126,7 @@ func (h *Host) presentProcs() (presentProcs, error) {
 type presentResources struct {
 	procs                                                   presentProcs
 	pool, acquireFence, renderFence, presentFence, finished uint64
+	command                                                 uintptr
 	acquirePending, renderPending, presentPending           bool
 	staging                                                 *stagingBuffer
 }
@@ -156,6 +159,7 @@ func (op *presentResources) releaseIfSafe(h *Host) error {
 	if op.pool != 0 {
 		_, _ = call(op.procs.destroyPool, h.device, uintptr(op.pool), 0)
 		op.pool = 0
+		op.command = 0
 	}
 	if op.finished != 0 {
 		_, _ = call(op.procs.destroySemaphore, h.device, uintptr(op.finished), 0)
@@ -223,7 +227,39 @@ func (op *presentResources) create(h *Host) error {
 		return errors.New("Vulkan 返回空命令池")
 	}
 	op.pool = handle
+	alloc := commandBufferAllocateInfo{SType: 40, Pool: op.pool, Count: 1}
+	r, err = call(op.procs.allocateCommands, h.device, uintptr(unsafe.Pointer(&alloc)), uintptr(unsafe.Pointer(&op.command)))
+	if err != nil {
+		return err
+	}
+	if err = result("vkAllocateCommandBuffers", r); err != nil {
+		return err
+	}
+	if op.command == 0 {
+		return errors.New("Vulkan 返回空命令缓冲区")
+	}
 	return nil
+}
+
+// reset is only called after all three previous fences have signaled.
+func (op *presentResources) reset(h *Host) error {
+	if op.acquirePending || op.renderPending || op.presentPending {
+		return ErrPresentBusy
+	}
+	fences := [3]uint64{op.acquireFence, op.renderFence, op.presentFence}
+	r, err := call(op.procs.resetFences, h.device, uintptr(len(fences)), uintptr(unsafe.Pointer(&fences[0])))
+	runtime.KeepAlive(fences)
+	if err != nil {
+		return err
+	}
+	if err = result("vkResetFences", r); err != nil {
+		return err
+	}
+	r, err = call(op.procs.resetPool, h.device, uintptr(op.pool), 0)
+	if err != nil {
+		return err
+	}
+	return result("vkResetCommandPool", r)
 }
 
 // PresentClear submits one cleared image and waits on separate acquire,
@@ -251,6 +287,10 @@ type frameHooks struct {
 }
 
 func (s *Swapchain) presentFrame(hooks frameHooks) (err error) {
+	return s.presentFrameWith(hooks, (*Host).presentProcs)
+}
+
+func (s *Swapchain) presentFrameWith(hooks frameHooks, resolve func(*Host) (presentProcs, error)) (err error) {
 	h := s.host
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -268,42 +308,43 @@ func (s *Swapchain) presentFrame(hooks frameHooks) (err error) {
 			return err
 		}
 	}
-	p, err := h.presentProcs()
-	if err != nil {
-		return err
+	op := s.reusable
+	s.reusable = nil
+	if op == nil {
+		p, e := resolve(h)
+		if e != nil {
+			return e
+		}
+		op = &presentResources{procs: p}
 	}
-	op := &presentResources{procs: p}
 	defer func() {
 		if err != nil {
 			s.poisoned = true
-		}
-		if cleanupErr := op.releaseIfSafe(h); cleanupErr != nil {
-			s.pending = op
-			err = errors.Join(err, cleanupErr)
+			if cleanupErr := op.releaseIfSafe(h); cleanupErr != nil {
+				s.pending = op
+				err = errors.Join(err, cleanupErr)
+			}
+		} else {
+			s.reusable = op
 		}
 	}()
-	if err = op.create(h); err != nil {
+	if op.pool == 0 {
+		err = op.create(h)
+	} else {
+		err = op.reset(h)
+	}
+	if err != nil {
 		return err
 	}
+	p := op.procs
 	if hooks.prepare != nil {
 		if err = hooks.prepare(h, op); err != nil {
 			return err
 		}
 	}
-	alloc := commandBufferAllocateInfo{SType: 40, Pool: op.pool, Count: 1}
-	var cmd uintptr
-	r, e := call(p.allocateCommands, h.device, uintptr(unsafe.Pointer(&alloc)), uintptr(unsafe.Pointer(&cmd)))
-	if e != nil {
-		return e
-	}
-	if e = result("vkAllocateCommandBuffers", r); e != nil {
-		return e
-	}
-	if cmd == 0 {
-		return errors.New("Vulkan 返回空命令缓冲区")
-	}
+	cmd := op.command
 	var index uint32
-	r, e = call(p.acquire, h.device, uintptr(s.swapchain), presentWaitNS, 0, uintptr(op.acquireFence), uintptr(unsafe.Pointer(&index)))
+	r, e := call(p.acquire, h.device, uintptr(s.swapchain), presentWaitNS, 0, uintptr(op.acquireFence), uintptr(unsafe.Pointer(&index)))
 	if e != nil {
 		return e
 	}

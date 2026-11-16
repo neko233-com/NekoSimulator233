@@ -73,6 +73,7 @@ type Swapchain struct {
 	format                           surfaceFormat
 	usage                            uint32
 	pending                          *presentResources
+	reusable                         *presentResources
 	poisoned                         bool
 }
 
@@ -365,6 +366,12 @@ func (s *Swapchain) closeLocked() error {
 			return err
 		}
 		s.pending = nil
+	}
+	if s.reusable != nil {
+		if err := s.reusable.releaseIfSafe(s.host); err != nil {
+			return err
+		}
+		s.reusable = nil
 	}
 	if s.swapchain != 0 {
 		_, _ = call(s.destroySwapchain, s.host.device, uintptr(s.swapchain), 0)
