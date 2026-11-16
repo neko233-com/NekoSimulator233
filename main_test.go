@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -11,7 +12,7 @@ import (
 func TestInstanceView(t *testing.T) {
 	a := &app{message: "已连接", instances: []mumu.Instance{{Index: "0", Name: "测试实例", AndroidVersion: "15.0", AndroidStarted: true}}}
 	tester := ui.NewTester(a.view, 760, 500)
-	for _, want := range []string{"NekoSimulator233", "已连接", "资源设置…", "安装 APK…", "更新 APK…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
+	for _, want := range []string{"NekoSimulator233", "已连接", "资源设置…", "安装 APK…", "更新 APK…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
@@ -63,5 +64,25 @@ func TestResourceSettingsViewAndValidation(t *testing.T) {
 	s.save()
 	if s.message == "" || s.busy {
 		t.Fatal("invalid resources were not rejected")
+	}
+}
+
+func TestRestoreRequiresNewNameBeforeOpeningDialog(t *testing.T) {
+	a := &app{newInstance: "   "}
+	a.transferBackup(true)
+	if a.busy || a.backupCancel != nil || a.message == "" {
+		t.Fatalf("empty restore name was not rejected: %+v", a)
+	}
+}
+
+func TestCloseCancelsBackupBeforeWindowCloses(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &app{backupCancel: cancel}
+	if !a.cancelBackupForClose() || !a.closeAfterBackup || ctx.Err() != context.Canceled {
+		t.Fatal("window close did not request backup cancellation")
+	}
+	a.backupCancel = nil
+	if a.cancelBackupForClose() {
+		t.Fatal("window close was blocked with no backup")
 	}
 }

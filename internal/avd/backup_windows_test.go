@@ -8,11 +8,77 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCanceledBackupOperationsPreserveData(t *testing.T) {
+	source := backupFixture(t)
+	archive := filepath.Join(t.TempDir(), "source.nekobak")
+	if err := source.ExportBackup(context.Background(), archive); err != nil {
+		t.Fatal(err)
+	}
+	dataPath := filepath.Join(source.Home, source.Name+".avd", "userdata-qemu.img")
+	before, err := os.ReadFile(dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	unwritten := filepath.Join(t.TempDir(), "canceled.nekobak")
+	if err := source.ExportBackup(ctx, unwritten); !errors.Is(err, context.Canceled) {
+		t.Fatalf("export was not canceled: %v", err)
+	}
+	if _, err := os.Lstat(unwritten); !os.IsNotExist(err) {
+		t.Fatal("canceled export created an archive")
+	}
+	target := Manager{SDK: source.SDK, Home: filepath.Join(t.TempDir(), "restored"), Name: "Canceled"}
+	if err := target.ImportBackup(ctx, archive); !errors.Is(err, context.Canceled) {
+		t.Fatalf("import was not canceled: %v", err)
+	}
+	for _, path := range []string{filepath.Join(target.Home, target.Name+".avd"), filepath.Join(target.Home, target.Name+".ini")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatal("canceled import created a target instance")
+		}
+	}
+	after, err := os.ReadFile(dataPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("canceled operation changed source data")
+	}
+}
+
+func TestImportRejectsLiveTargetEvenWithoutItsMetadata(t *testing.T) {
+	source := backupFixture(t)
+	archive := filepath.Join(t.TempDir(), "source.nekobak")
+	if err := source.ExportBackup(context.Background(), archive); err != nil {
+		t.Fatal(err)
+	}
+	target := Manager{SDK: source.SDK, Home: filepath.Join(t.TempDir(), "target"), Name: "LiveTarget"}
+	temp := t.TempDir()
+	t.Setenv("TMP", temp)
+	running := filepath.Join(temp, "avd", "running")
+	if err := os.MkdirAll(running, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pid := os.Getpid()
+	dir := filepath.Join(target.Home, target.Name+".avd")
+	info := fmt.Sprintf("avd.name=%s\navd.dir=%s\nport.serial=5578\ngrpc.port=8559\ngrpc.token=test\n", target.Name, dir)
+	if err := os.WriteFile(filepath.Join(running, fmt.Sprintf("pid_%d.ini", pid)), []byte(info), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ImportBackup(context.Background(), archive); err == nil || !strings.Contains(err.Error(), "运行") {
+		t.Fatalf("live target accepted: %v", err)
+	}
+	for _, path := range []string{dir, filepath.Join(target.Home, target.Name+".ini")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("created target while its process was live: %s, %v", path, err)
+		}
+	}
+}
 
 func backupFixture(t *testing.T) Manager {
 	t.Helper()

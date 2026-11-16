@@ -19,18 +19,20 @@ import (
 var version = "0.0.0"
 
 type app struct {
-	window        *mygo.Window
-	client        mumu.Client
-	root          string
-	instances     []mumu.Instance
-	busy          bool
-	message       string
-	updateMessage string
-	viewers       map[string]*viewer
-	resources     map[string]*resourceSettings
-	selected      string
-	available     []avd.InstanceSummary
-	newInstance   string
+	window           *mygo.Window
+	client           mumu.Client
+	root             string
+	instances        []mumu.Instance
+	busy             bool
+	message          string
+	updateMessage    string
+	viewers          map[string]*viewer
+	resources        map[string]*resourceSettings
+	selected         string
+	available        []avd.InstanceSummary
+	newInstance      string
+	backupCancel     context.CancelFunc
+	closeAfterBackup bool
 }
 
 func (a *app) selectedName() string {
@@ -267,7 +269,7 @@ func (a *app) view(c *ui.Context) {
 		}
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Select(c.Key("independent-select"), &a.selected, a.instanceChoices()).Label("独立实例").Disabled(a.busy)
-			ui.TextInput(c.Key("new-instance"), &a.newInstance).Placeholder("新实例名称（英文或数字）").Width(220).Disabled(a.busy)
+			ui.TextInput(c.Key("new-instance"), &a.newInstance).Placeholder("新建或恢复的实例名称").Width(220).Disabled(a.busy)
 			if ui.Button(c.Key("create-instance"), "新建实例").Disabled(a.busy).Clicked() {
 				a.createIndependent()
 			}
@@ -297,6 +299,19 @@ func (a *app) view(c *ui.Context) {
 				a.chooseAPK(true)
 			}
 		})
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("backup-instance"), "备份选中实例…").Disabled(a.busy).Clicked() {
+				a.transferBackup(false)
+			}
+			if ui.Button(c.Key("restore-instance"), "恢复备份到新实例…").Disabled(a.busy).Clicked() {
+				a.transferBackup(true)
+			}
+			if a.backupCancel != nil && ui.Button(c.Key("cancel-backup"), "取消备份或恢复").Clicked() {
+				a.backupCancel()
+				a.message = "正在取消，请稍候…"
+			}
+		})
+		ui.Text(c, "备份未加密，包含应用数据；恢复请先填写新的实例名称。").FontSize(12).TextColor(t.TextMuted)
 		if ui.Button(c.Key("refresh"), "刷新实例").Disabled(a.busy).Clicked() {
 			a.refresh()
 		}
@@ -369,6 +384,11 @@ func main() {
 	a := &app{message: "正在连接…", updateMessage: updateMessage}
 	mygo.App.WhenReady(func() {
 		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "NekoSimulator233", Width: 760, Height: 500, Content: ui.View(a.view)})
+		a.window.OnClose(func(e *mygo.CloseEvent) {
+			if a.cancelBackupForClose() {
+				e.PreventDefault()
+			}
+		})
 		a.refresh()
 	})
 	if err := mygo.App.Run(); err != nil {

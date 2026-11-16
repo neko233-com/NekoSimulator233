@@ -509,6 +509,9 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 	if err = tmp.Close(); err != nil {
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	from, _ := windows.UTF16PtrFromString(tmp.Name())
 	to, _ := windows.UTF16PtrFromString(target)
 	if err = windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
@@ -595,6 +598,11 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		if present {
 			return errors.New("目标实例已存在或不完整，导入不会覆盖任何文件")
 		}
+	}
+	if _, err = m.discover(); err == nil {
+		return errors.New("目标实例正在运行，未导入")
+	} else if !errors.Is(err, errInstanceNotRunning) {
+		return err
 	}
 	if inDirectory(source, finalDir) {
 		return errors.New("备份不能位于目标实例目录内")

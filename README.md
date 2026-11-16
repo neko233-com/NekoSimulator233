@@ -10,6 +10,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 主窗口可新建和选择多个独立实例。名称使用英文、数字、点、下划线或连字符；新建时不会覆盖已有实例或不完整目录。启动、关闭、资源设置与 APK 安装作用于当前选中的实例；多个实例各有独立的 Android 数据和资源设置。运行状态是上次检查时的进程状态，可以通过“刷新实例”重新检查。多开会增加宿主资源占用。
 
+“备份选中实例…”可将已关闭的独立实例导出为 `.nekobak`；恢复时先填写尚不存在的新实例名称，再选择“恢复备份到新实例…”。备份包含 Android 用户磁盘和实例资源设置，文件**未加密**，请按私人数据保存；当前不包含键位配置。恢复会检查备份校验值、可用磁盘空间和 Android 系统镜像版本，已有目标不会被覆盖。只支持本项目的备份格式，不支持直接导入 MuMu 的实例或备份。
+
 独立实例窗口的“编辑键位”可将画面位置绑定到键盘：点击画面位置，再按对应按键；“删除键位”选择后按要删除的键。编辑界面也可选择“设置 WASD 摇杆”，点击游戏摇杆中心，再用缩小或放大按钮调整半径；编辑时画面显示键位和摇杆范围，“完成键位”退出编辑。WASD 已有单点绑定时需先删除这些绑定。默认实例继续使用 `%LOCALAPPDATA%/NekoSimulator233-data/keymap.json`，其他实例分别保存到 `keymaps` 目录。其他未绑定按键仍直通 Android。摇杆占用一个触点，可与鼠标和其他绑定键同时使用；失焦或画面尺寸变化时释放输入。尚无按键组合或按游戏切换方案。GUI 与 Agent 对同一实例的触屏手势互斥，忙时会返回具体原因。
 
 兼容模式：启动 MuMu 后运行程序，或将 `NEKO_MUMU_ROOT` 指向 MuMu 安装目录。已启动的 MuMu 实例可在自己的画面窗口打开；停止的实例先由 MuMu 启动，待 Android 启动后刷新。兼容模式的图形后端由 MuMu 配置决定。
@@ -19,21 +21,21 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.14
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.14-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.15
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.15-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.15-x64.msi -Version 0.1.15
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.16-x64.msi -Version 0.1.16
 ```
 
 安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
 
 ## Agent 控制
 
-安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_status`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
+安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
 MCP 默认选择 `NekoSimulator233` 实例；使用 `neko_create_instance` 创建，使用 `neko_select_instance` 选择后，其他操作针对所选实例。选择状态属于 MCP 服务进程，连接同一进程的客户端会共享该选择；可为需要隔离选择状态的客户端分别启动服务进程。
 

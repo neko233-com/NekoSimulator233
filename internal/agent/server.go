@@ -99,6 +99,13 @@ type UITapResult struct {
 type InstanceName struct {
 	Name string `json:"name" jsonschema:"Project-owned instance name"`
 }
+type BackupPath struct {
+	Path string `json:"path" jsonschema:"Absolute path of the local .nekobak archive"`
+}
+type RestoreBackup struct {
+	Path string `json:"path" jsonschema:"Absolute path of the local .nekobak archive"`
+	Name string `json:"name" jsonschema:"Name of the new instance; existing targets are never overwritten"`
+}
 type InstanceList struct {
 	Instances []avd.InstanceSummary `json:"instances"`
 	Selected  string                `json:"selected"`
@@ -115,6 +122,8 @@ func New(manager func() (avd.Manager, error)) *mcp.Server {
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance without overwriting existing data; does not start it."), s.createInstance)
 	mcp.AddTool(server, rw("neko_select_instance", "Select an existing independent instance for subsequent tools in this MCP server process."), s.selectInstance)
+	mcp.AddTool(server, rw("neko_export_backup", "Export the selected stopped instance to a new unencrypted .nekobak archive containing private guest data; never overwrite a file."), s.exportBackup)
+	mcp.AddTool(server, rw("neko_import_backup", "Restore an independent .nekobak to a new instance name without overwriting an existing instance. This does not import MuMu archives."), s.importBackup)
 	mcp.AddTool(server, rw("neko_start", "Start or attach to the Neko-owned Android instance and wait for Android and hardware Vulkan readiness."), s.start)
 	mcp.AddTool(server, rw("neko_stop", "Shut down only the Neko-owned Android instance; preserve its data."), s.stop)
 	mcp.AddTool(server, ro("neko_get_resources", "Read the configured virtual CPU cores and guest RAM for the Neko-owned instance."), s.getResources)
