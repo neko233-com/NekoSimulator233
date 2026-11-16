@@ -46,6 +46,10 @@ func (p *fitPlan) matches(frame *image.RGBA, extent extent2D) bool {
 	return p != nil && frame != nil && p.sw == frame.Rect.Dx() && p.sh == frame.Rect.Dy() && p.w == int(extent.Width) && p.h == int(extent.Height)
 }
 
+func (p *fitPlan) unscaledLetterbox() bool {
+	return p != nil && p.fw == p.sw && p.fh == p.sh && (p.w != p.sw || p.h != p.sh)
+}
+
 // Called with the host lock held, as part of validating a submission.
 func (s *Swapchain) ensureFitPlan(frame *image.RGBA) error {
 	if s.fit.matches(frame, s.extent) {

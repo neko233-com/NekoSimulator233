@@ -9,7 +9,62 @@ import (
 	"unsafe"
 
 	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
+	"golang.org/x/sys/windows"
 )
+
+func TestUnscaledLetterboxRecordsClearBarrierAndSourceCopy(t *testing.T) {
+	for _, dims := range [][4]int{{4, 2, 4, 5}, {2, 4, 5, 4}} {
+		plan, err := newFitPlan(dims[0], dims[1], extent2D{uint32(dims[2]), uint32(dims[3])})
+		if err != nil || !plan.unscaledLetterbox() {
+			t.Fatalf("letterbox plan %v: %v", dims, err)
+		}
+		var calls []string
+		var gotColor [4]float32
+		var gotBarrier imageMemoryBarrier
+		var gotRegion bufferImageCopy
+		op := &presentResources{staging: &stagingBuffer{buffer: 8}}
+		op.procs.clear = windows.NewCallback(func(_, _, _, color, _, _ uintptr) uintptr {
+			calls = append(calls, "clear")
+			gotColor = *(*[4]float32)(unsafe.Pointer(color))
+			return 0
+		})
+		op.procs.barrier = windows.NewCallback(func(_, src, dst, _, _, _, _, _, count, ptr uintptr) uintptr {
+			calls = append(calls, "barrier")
+			if src != vkStageTransfer || dst != vkStageTransfer || count != 1 {
+				calls = append(calls, "invalid barrier")
+			}
+			gotBarrier = *(*imageMemoryBarrier)(unsafe.Pointer(ptr))
+			return 0
+		})
+		op.staging.procs.copyToImage = windows.NewCallback(func(_, buffer, image, layout, count, ptr uintptr) uintptr {
+			calls = append(calls, "copy")
+			if buffer != 8 || image != 9 || layout != vkLayoutTransferDst || count != 1 {
+				calls = append(calls, "invalid copy")
+			}
+			gotRegion = *(*bufferImageCopy)(unsafe.Pointer(ptr))
+			return 0
+		})
+		rng := imageSubresourceRange{AspectMask: 1, LevelCount: 1, LayerCount: 1}
+		if err := recordUnscaledLetterbox(op, 7, 9, &rng, plan); err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 3 || calls[0] != "clear" || calls[1] != "barrier" || calls[2] != "copy" || gotColor != [4]float32{0, 0, 0, 1} {
+			t.Fatalf("invalid command sequence or clear color: %v %v", calls, gotColor)
+		}
+		if gotBarrier.SrcAccess != vkAccessTransferWrite || gotBarrier.DstAccess != vkAccessTransferWrite || gotBarrier.OldLayout != vkLayoutTransferDst || gotBarrier.NewLayout != vkLayoutTransferDst || gotBarrier.Image != 9 {
+			t.Fatalf("invalid barrier %+v", gotBarrier)
+		}
+		if gotRegion.Offset.X != int32(plan.left) || gotRegion.Offset.Y != int32(plan.top) || gotRegion.Extent != (extent3D{Width: uint32(plan.sw), Height: uint32(plan.sh), Depth: 1}) {
+			t.Fatalf("invalid source region %+v", gotRegion)
+		}
+	}
+	for _, dims := range [][4]int{{4, 2, 4, 2}, {4, 2, 8, 4}, {4, 2, 2, 3}} {
+		plan, err := newFitPlan(dims[0], dims[1], extent2D{uint32(dims[2]), uint32(dims[3])})
+		if err != nil || plan.unscaledLetterbox() {
+			t.Fatalf("incorrect fast-path selection for %v", dims)
+		}
+	}
+}
 
 func TestStagingWin64ABI(t *testing.T) {
 	for _, c := range []struct {

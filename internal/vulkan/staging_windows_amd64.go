@@ -351,8 +351,12 @@ func (s *Swapchain) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
 
 func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 	var size int
+	var directLetterbox bool
 	pack := func(data []byte, compare bool) error {
 		if fit {
+			if directLetterbox {
+				return frameBytes(data, frame, s.format.Format, false)
+			}
 			if compare {
 				return fittedFrame(data, frame, s.extent, s.format.Format, true)
 			}
@@ -364,13 +368,20 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 		validate: func(_ *Host) error {
 			var err error
 			if fit {
-				_, err = validateFrame(frame)
+				var sourceSize int
+				sourceSize, err = validateFrame(frame)
 				w, h := uint64(s.extent.Width), uint64(s.extent.Height)
 				if err == nil && (w == 0 || h == 0 || w > 8192 || h > 8192 || w*h > 32*1024*1024 || frame.Rect.Dx() > 8192 || frame.Rect.Dy() > 8192 || uint64(frame.Rect.Dx())*uint64(frame.Rect.Dy()) > 32*1024*1024) {
 					err = errors.New("画面尺寸无效")
 				}
 				if err == nil {
 					size = int(w * h * 4)
+				}
+				if err == nil {
+					if err = s.ensureFitPlan(frame); err == nil && !verify && s.fit.unscaledLetterbox() {
+						directLetterbox = true
+						size = sourceSize
+					}
 				}
 			} else {
 				size, err = frameSize(frame, s.extent)
@@ -380,11 +391,6 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 			}
 			if verify && s.usage&vkUsageTransferSrc == 0 {
 				return errors.New("Vulkan 表面不支持图像回读")
-			}
-			if fit {
-				if err := s.ensureFitPlan(frame); err != nil {
-					return err
-				}
 			}
 			return nil
 		},
@@ -396,6 +402,12 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 		},
 		record: func(h *Host, op *presentResources, cmd uintptr, img uint64, rng *imageSubresourceRange) (uint32, uint32, error) {
 			b := op.staging
+			if directLetterbox {
+				if err := recordUnscaledLetterbox(op, cmd, img, rng, s.fit); err != nil {
+					return 0, 0, err
+				}
+				return vkLayoutTransferDst, vkAccessTransferWrite, nil
+			}
 			region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Extent: extent3D{Width: s.extent.Width, Height: s.extent.Height, Depth: 1}}
 			_, err := call(b.procs.copyToImage, cmd, uintptr(b.buffer), uintptr(img), vkLayoutTransferDst, 1, uintptr(unsafe.Pointer(&region)))
 			if err != nil {
@@ -427,4 +439,22 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 		}
 	}
 	return s.presentFrame(hooks)
+}
+
+// recordUnscaledLetterbox clears the target on the GPU, synchronizes that
+// write, then uploads only the unchanged source rectangle into its center.
+func recordUnscaledLetterbox(op *presentResources, cmd uintptr, img uint64, rng *imageSubresourceRange, fit *fitPlan) error {
+	black := [4]float32{0, 0, 0, 1}
+	if _, err := call(op.procs.clear, cmd, uintptr(img), vkLayoutTransferDst, uintptr(unsafe.Pointer(&black[0])), 1, uintptr(unsafe.Pointer(rng))); err != nil {
+		return err
+	}
+	barrier := imageMemoryBarrier{SType: 45, SrcAccess: vkAccessTransferWrite, DstAccess: vkAccessTransferWrite, OldLayout: vkLayoutTransferDst, NewLayout: vkLayoutTransferDst, SrcQueueFamily: vkIgnoredQueue, DstQueueFamily: vkIgnoredQueue, Image: img, Range: *rng}
+	if _, err := call(op.procs.barrier, cmd, vkStageTransfer, vkStageTransfer, 0, 0, 0, 0, 0, 1, uintptr(unsafe.Pointer(&barrier))); err != nil {
+		return err
+	}
+	region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Offset: offset3D{X: int32(fit.left), Y: int32(fit.top)}, Extent: extent3D{Width: uint32(fit.sw), Height: uint32(fit.sh), Depth: 1}}
+	_, err := call(op.staging.procs.copyToImage, cmd, uintptr(op.staging.buffer), uintptr(img), vkLayoutTransferDst, 1, uintptr(unsafe.Pointer(&region)))
+	runtime.KeepAlive(black)
+	runtime.KeepAlive(region)
+	return err
 }
