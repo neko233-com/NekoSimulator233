@@ -114,6 +114,55 @@ func TestTouchFailureStillReleasesAllPossibleContacts(t *testing.T) {
 	}
 }
 
+func TestKeyboardFailureStillReleasesPossibleKeyDown(t *testing.T) {
+	for _, closeInstead := range []bool{false, true} {
+		t.Run(strconv.FormatBool(closeInstead), func(t *testing.T) {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer(grpc.ForceServerCodecV2(protoCodec{}))
+			service := &touchServer{}
+			server.RegisterService(&grpc.ServiceDesc{ServiceName: "android.emulation.control.EmulatorController", HandlerType: (*touchServerInterface)(nil), Methods: []grpc.MethodDesc{{MethodName: "sendKey", Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				var req rawProto
+				if err := dec(&req); err != nil {
+					return nil, err
+				}
+				return srv.(*touchServer).handle(ctx, &req)
+			}}}}, service)
+			go server.Serve(listener)
+			defer server.Stop()
+			c, err := DialController(listener.Addr().(*net.TCPAddr).Port, "test-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.KeyDown(0x04); err == nil {
+				t.Fatal("expected a failed key down response")
+			}
+			if err := c.KeyDown(0x04); err == nil {
+				t.Fatal("uncertain key was incorrectly reported as pressed successfully")
+			}
+			if !closeInstead {
+				if err := c.KeyUp(0x04); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+			service.mu.Lock()
+			defer service.mu.Unlock()
+			if len(service.calls) != 2 {
+				t.Fatalf("expected press and release, got %d", len(service.calls))
+			}
+			want := appendInt(appendInt(nil, 3, 0x70004), 2, 1)
+			if !bytes.Equal(service.calls[1], want) {
+				t.Fatalf("release request %v, want %v", service.calls[1], want)
+			}
+		})
+	}
+}
+
 func TestTouchValidation(t *testing.T) {
 	c := &Controller{width: 720, height: 1280, contacts: make(map[int]TouchPoint)}
 	for _, points := range [][]TouchPoint{

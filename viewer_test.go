@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -315,6 +316,31 @@ func TestKeymapOverlayVisibleWhileEditing(t *testing.T) {
 }
 
 type fakeMultiSession struct{ frames [][]display.TouchPoint }
+
+type failedKeySession struct{ releases int }
+
+func (*failedKeySession) Capture(dst *image.RGBA) (*image.RGBA, error) { return dst, nil }
+func (*failedKeySession) TouchDown(int, int) error                     { return nil }
+func (*failedKeySession) TouchUp() error                               { return nil }
+func (*failedKeySession) Close() error                                 { return nil }
+func (*failedKeySession) KeyDown(uint16) error                         { return errors.New("simulated lost response") }
+func (s *failedKeySession) KeyUp(uint16) error                         { s.releases++; return nil }
+
+func TestViewerReleasesKeyWhenPressResponseIsLost(t *testing.T) {
+	for _, releaseKind := range []int{keyUp, releaseKeys} {
+		source := &failedKeySession{}
+		input := newViewerInput(source)
+		if err := input.handle(pointerEvent{kind: keyDown, usage: 4}); err == nil {
+			t.Fatal("expected simulated error")
+		}
+		if err := input.handle(pointerEvent{kind: releaseKind, usage: 4}); err != nil {
+			t.Fatal(err)
+		}
+		if source.releases != 1 {
+			t.Fatal("possible key press was not released")
+		}
+	}
+}
 
 func (*fakeMultiSession) Capture(dst *image.RGBA) (*image.RGBA, error) { return dst, nil }
 func (*fakeMultiSession) TouchDown(int, int) error                     { return nil }

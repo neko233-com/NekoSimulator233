@@ -84,6 +84,7 @@ type Controller struct {
 	touchLockFile    *os.File
 	touchOverlap     windows.Overlapped
 	pressed          map[uint16]bool
+	uncertainKeys    map[uint16]bool
 	keyboardDisabled bool
 	closeOnce        sync.Once
 	closeErr         error
@@ -316,16 +317,28 @@ func (c *Controller) key(usage uint16, down bool) error {
 func (c *Controller) KeyDown(usage uint16) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !display.ValidKeyboardUsage(usage) {
+		return errors.New("不支持的键盘按键")
+	}
 	if c.keyboardDisabled {
 		return errors.New("实例未启用硬件键盘；请关闭后重新启动独立实例")
 	}
 	if c.pressed[usage] {
+		if c.uncertainKeys[usage] {
+			return errors.New("按键状态不确定，请先释放后重试")
+		}
 		return nil
 	}
+	// A failed RPC may have delivered the press before its response was lost.
+	// Keep it in the release set until an explicit key-up succeeds.
+	c.pressed[usage] = true
 	if err := c.key(usage, true); err != nil {
+		if c.uncertainKeys == nil {
+			c.uncertainKeys = make(map[uint16]bool)
+		}
+		c.uncertainKeys[usage] = true
 		return err
 	}
-	c.pressed[usage] = true
 	return nil
 }
 func (c *Controller) KeyUp(usage uint16) error {
@@ -338,6 +351,7 @@ func (c *Controller) KeyUp(usage uint16) error {
 		return err
 	}
 	delete(c.pressed, usage)
+	delete(c.uncertainKeys, usage)
 	return nil
 }
 func (c *Controller) Close() error {

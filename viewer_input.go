@@ -103,10 +103,12 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		if v.pressed[ev.usage] {
 			return nil
 		}
+		// A failed send can still have reached the guest; retain the release
+		// obligation so key-up or focus loss retries it.
+		v.pressed[ev.usage] = true
 		if err := v.keyboard.KeyDown(ev.usage); err != nil {
 			return err
 		}
-		v.pressed[ev.usage] = true
 		return nil
 	case keyUp:
 		if v.keyboard == nil || !v.pressed[ev.usage] {
