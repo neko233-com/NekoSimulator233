@@ -72,18 +72,28 @@ func (a *app) startIndependent() {
 		v.win.Focus()
 		return
 	}
-	a.busy = true
-	a.message = "正在启动独立 Android 实例并验证 Vulkan…"
+	ctx, cancel := context.WithCancel(context.Background())
+	a.busy, a.sdkCancel = true, cancel
+	a.sdkJob++
+	job := a.sdkJob
+	a.message = "正在准备并启动独立 Android 实例…"
 	go func() {
 		manager, err := selectedManager(name)
 		var instance avd.Instance
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			instance, err = manager.Start(ctx)
-			cancel()
+			instance, err = manager.StartWithProgress(ctx, func(percent int) {
+				a.window.Update(func() {
+					if a.sdkJob == job && a.sdkCancel != nil && ctx.Err() == nil {
+						a.message = fmt.Sprintf("正在准备 Google Play 镜像：%d%%", percent)
+					}
+				})
+			})
 		}
 		var source *avd.Controller
 		var bindingsPath string
+		if err == nil && ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		if err == nil {
 			source, err = instance.Open()
 		}
@@ -94,7 +104,23 @@ func (a *app) startIndependent() {
 			}
 		}
 		a.window.Update(func() {
-			a.busy = false
+			defer cancel()
+			a.busy, a.sdkCancel = false, nil
+			if a.closeAfterSDK {
+				a.closeAfterSDK = false
+				if source != nil {
+					_ = source.Close()
+				}
+				a.window.Close()
+				return
+			}
+			if err == nil && ctx.Err() != nil {
+				if source != nil {
+					_ = source.Close()
+				}
+				a.message = "已取消打开画面；已启动的实例会保留"
+				return
+			}
 			if err != nil {
 				a.message = err.Error()
 				return
@@ -335,9 +361,9 @@ func (a *app) view(c *ui.Context) {
 			if ui.Button(c.Key("install-play-image"), "安装 Google Play 镜像…").Disabled(a.busy).Clicked() {
 				a.installPlayImage()
 			}
-			if a.sdkCancel != nil && ui.Button(c.Key("cancel-play-image"), "取消镜像安装").Clicked() {
+			if a.sdkCancel != nil && ui.Button(c.Key("cancel-play-image"), "取消准备或启动").Clicked() {
 				a.sdkCancel()
-				a.message = "正在取消镜像安装…"
+				a.message = "正在取消准备或启动…"
 			}
 		})
 		if status := a.selectedStatus(); status != "" {

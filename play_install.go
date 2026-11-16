@@ -14,7 +14,7 @@ func (a *app) cancelSDKForClose() bool {
 	}
 	a.closeAfterSDK = true
 	a.sdkCancel()
-	a.message = "正在取消镜像安装，结束后关闭…"
+	a.message = "正在取消准备或启动，结束后关闭…"
 	return true
 }
 

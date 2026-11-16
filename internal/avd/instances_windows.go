@@ -215,3 +215,49 @@ func (m Manager) createPlayInstance(ctx context.Context, name string, api int, n
 	}
 	return m.createInstanceWithPolicy(ctx, name, chosen, true)
 }
+
+// prepareStart validates existing metadata or creates a Play-backed instance
+// without holding the lifecycle lock across an SDK image download.
+func (m Manager) prepareStart(ctx context.Context, notify func(int), install func(context.Context, int, func(int)) error) error {
+	check := func() (bool, error) {
+		unlock, err := m.lockLifecycle(ctx, true)
+		if err != nil {
+			return false, err
+		}
+		defer unlock()
+		dir, err := existsOrLink(filepath.Join(m.Home, m.Name+".avd"))
+		if err != nil {
+			return false, err
+		}
+		ini, err := existsOrLink(filepath.Join(m.Home, m.Name+".ini"))
+		if err != nil {
+			return false, err
+		}
+		if !dir && !ini {
+			return false, nil
+		}
+		if !dir || !ini {
+			return false, errors.New("实例配置不完整，已保留现有数据；请检查 AVD 目录")
+		}
+		if err := m.ensureWithImagePolicy(0, true); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	exists, err := check()
+	if err != nil || exists {
+		return err
+	}
+	err = m.createPlayInstance(ctx, m.Name, 0, notify, install)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// Another Neko process may have created this instance during the download.
+	if exists, checkErr := check(); checkErr == nil && exists {
+		return nil
+	}
+	return err
+}

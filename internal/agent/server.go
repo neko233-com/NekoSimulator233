@@ -184,7 +184,7 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, rw("neko_select_instance", "Select an existing independent instance for subsequent tools in this MCP server process."), s.selectInstance)
 	mcp.AddTool(server, rw("neko_export_backup", "Export the selected stopped instance to a new unencrypted .nekobak archive containing private guest data; never overwrite a file."), s.exportBackup)
 	mcp.AddTool(server, rw("neko_import_backup", "Restore an independent .nekobak to a new instance name without overwriting an existing instance. This does not import MuMu archives."), s.importBackup)
-	mcp.AddTool(server, rw("neko_start", "Start or attach to the Neko-owned Android instance and wait for Android and hardware Vulkan readiness."), s.start)
+	mcp.AddTool(server, rw("neko_start", "Start or attach to the selected Neko-owned instance; on first start prepare the official Google Play image with progress and cancellation, then wait for Android and hardware Vulkan readiness."), s.start)
 	mcp.AddTool(server, rw("neko_stop", "Shut down only the Neko-owned Android instance; preserve its data."), s.stop)
 	mcp.AddTool(server, ro("neko_get_resources", "Read the configured virtual CPU cores and guest RAM for the Neko-owned instance."), s.getResources)
 	mcp.AddTool(server, rw("neko_set_resources", "Set virtual CPU cores and guest RAM for the Neko-owned instance; the instance must be stopped and settings apply at next startup."), s.setResources)
@@ -360,16 +360,21 @@ func (s *Service) status(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (
 	}
 	return nil, state(i), nil
 }
-func (s *Service) start(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, State, error) {
+func (s *Service) start(ctx context.Context, req *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, State, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	m, err := s.manager()
+	s.mu.Unlock()
 	if err != nil {
 		return nil, State{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	i, err := m.Start(ctx)
+	var notify func(int)
+	if req != nil && req.Params != nil && req.Params.GetProgressToken() != nil {
+		token := req.Params.GetProgressToken()
+		notify = func(percent int) {
+			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "准备 Google Play 系统镜像"})
+		}
+	}
+	i, err := m.StartWithProgress(ctx, notify)
 	if err != nil {
 		return nil, State{}, err
 	}

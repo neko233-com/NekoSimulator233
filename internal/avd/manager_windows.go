@@ -491,6 +491,20 @@ func (m Manager) lockLifecycle(ctx context.Context, create bool) (func(), error)
 // Start attaches only to our AVD, or launches one if it is absent. Boot and
 // hardware Vulkan are verified before reporting a ready instance.
 func (m Manager) Start(ctx context.Context) (Instance, error) {
+	return m.StartWithProgress(ctx, nil)
+}
+
+// StartWithProgress prepares the official Play image on first start and then
+// limits the boot phase separately. Existing instances are never changed.
+func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Instance, error) {
+	if err := m.prepareStart(ctx, notify, func(ctx context.Context, api int, notify func(int)) error {
+		_, err := m.InstallPlayImage(ctx, api, notify)
+		return err
+	}); err != nil {
+		return Instance{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
 	unlock, err := m.lockLifecycle(ctx, true)
 	if err != nil {
 		return Instance{}, err

@@ -93,11 +93,92 @@ func TestStartDoesNotCreateGoogleAPIsFallbackWhenPlayImageMissing(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := candidate.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "Google Play") {
+	if err := candidate.prepareStart(context.Background(), nil, func(context.Context, int, func(int)) error { return errors.New("Google Play unavailable") }); err == nil || !strings.Contains(err.Error(), "Google Play") {
 		t.Fatalf("start did not require a Play image: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(m.Home, "StartNew.avd")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fallback instance created: %v", err)
+	}
+}
+
+func TestPrepareFirstStartCreatesPlayImageAndPreservesExistingInstance(t *testing.T) {
+	m := backupFixture(t)
+	oldPath := filepath.Join(m.Home, m.Name+".avd", "config.ini")
+	old, err := os.ReadFile(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.prepareStart(context.Background(), nil, func(context.Context, int, func(int)) error {
+		t.Fatal("existing instance attempted image installation")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(oldPath)
+	if err != nil || string(old) != string(after) {
+		t.Fatal("existing instance changed")
+	}
+	candidate, err := m.WithName("FirstStart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.prepareStart(context.Background(), nil, func(_ context.Context, api int, _ func(int)) error {
+		if api != 34 {
+			t.Fatalf("unexpected API %d", api)
+		}
+		addTestImage(t, m.SDK, "google_apis_playstore", "12077443")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := parseINI(filepath.Join(m.Home, "FirstStart.avd", "config.ini"))
+	if err != nil || config["tag.id"] != "google_apis_playstore" {
+		t.Fatalf("first start did not use Play: %v %v", config, err)
+	}
+}
+
+func TestPrepareStartPreservesPartialInstance(t *testing.T) {
+	m := backupFixture(t)
+	candidate, err := m.WithName("Partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.Home, "Partial.avd")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = candidate.prepareStart(context.Background(), nil, func(context.Context, int, func(int)) error {
+		t.Fatal("partial instance caused image download")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("partial instance accepted")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "keep"))
+	if err != nil || string(data) != "data" {
+		t.Fatal("partial instance modified")
+	}
+}
+
+func TestPrepareStartAcceptsConcurrentOwnedCreation(t *testing.T) {
+	m := backupFixture(t)
+	candidate, err := m.WithName("ConcurrentStart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = candidate.prepareStart(context.Background(), nil, func(ctx context.Context, _ int, _ func(int)) error {
+		addTestImage(t, m.SDK, "google_apis_playstore", "12077443")
+		return m.createInstanceWithPolicy(ctx, "ConcurrentStart", 34, true)
+	})
+	if err != nil {
+		t.Fatalf("concurrent valid creation did not converge: %v", err)
+	}
+	config, err := parseINI(filepath.Join(m.Home, "ConcurrentStart.avd", "config.ini"))
+	if err != nil || config["tag.id"] != "google_apis_playstore" {
+		t.Fatalf("incorrect instance: %v %v", config, err)
 	}
 }
 
