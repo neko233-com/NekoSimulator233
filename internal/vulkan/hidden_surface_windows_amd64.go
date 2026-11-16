@@ -12,7 +12,9 @@ import (
 
 // inspectHiddenSurface creates only a short-lived invisible window owned by
 // this process. Its swapchain is closed before the HWND is destroyed.
-func inspectHiddenSurface(h *Host) (SwapchainInfo, error) {
+// present is reserved for a short-lived probe process: if the GPU stops
+// responding, the process must exit to let Windows release its resources.
+func inspectHiddenSurface(h *Host, present bool) (SwapchainInfo, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	createWindow := user32.NewProc("CreateWindowExW")
@@ -27,12 +29,27 @@ func inspectHiddenSurface(h *Host) (SwapchainInfo, error) {
 	if hwnd == 0 {
 		return SwapchainInfo{}, fmt.Errorf("创建测试窗口失败：%w", err)
 	}
-	defer destroyWindow.Call(hwnd)
+	destroy := true
+	defer func() {
+		if destroy {
+			destroyWindow.Call(hwnd)
+		}
+	}()
 	s, err := h.CreateSwapchain(hwnd)
 	if err != nil {
 		return SwapchainInfo{}, err
 	}
 	info := s.Info()
+	if present {
+		if err := s.PresentClear([4]float32{1, 0.25, 0.5, 1}); err != nil {
+			if closeErr := s.Close(); closeErr != nil {
+				destroy = false
+				return SwapchainInfo{}, fmt.Errorf("%v；%w", err, closeErr)
+			}
+			return SwapchainInfo{}, err
+		}
+		info.ClearSubmitted = true
+	}
 	if err := s.Close(); err != nil {
 		return SwapchainInfo{}, err
 	}

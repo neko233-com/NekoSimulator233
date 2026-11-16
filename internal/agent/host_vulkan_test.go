@@ -16,12 +16,16 @@ import (
 
 func TestHostVulkanMCP(t *testing.T) {
 	called := 0
+	presentCalls := 0
 	s := &Service{hostProbe: func(testSurface bool) (vulkan.DeviceInfo, error) {
 		called++
 		if !testSurface {
 			t.Error("surface flag was not forwarded")
 		}
 		return vulkan.DeviceInfo{Name: "synthetic GPU", Swapchain: true, GraphicsQueueFamily: 3}, nil
+	}, presentProbe: func(context.Context) (vulkan.DeviceInfo, error) {
+		presentCalls++
+		return vulkan.DeviceInfo{Name: "synthetic GPU", PresentFence: true, TestSurface: &vulkan.SwapchainInfo{Width: 64, Height: 64, ImageCount: 3, ClearSubmitted: true}}, nil
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -43,6 +47,14 @@ func TestHostVulkanMCP(t *testing.T) {
 	data, err := json.Marshal(result.StructuredContent)
 	if err != nil || !strings.Contains(string(data), "synthetic GPU") || !strings.Contains(string(data), `"graphics_queue_family":3`) {
 		t.Fatalf("unexpected host result %s: %v", data, err)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_host_vulkan", Arguments: map[string]any{"test_present": true}})
+	if err != nil || result.IsError || presentCalls != 1 || called != 1 {
+		t.Fatalf("present probe call: %v host=%d present=%d", err, called, presentCalls)
+	}
+	data, err = json.Marshal(result.StructuredContent)
+	if err != nil || !strings.Contains(string(data), `"clear_submitted":true`) {
+		t.Fatalf("unexpected present result %s: %v", data, err)
 	}
 	canceled, stop := context.WithCancel(context.Background())
 	stop()

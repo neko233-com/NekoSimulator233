@@ -9,8 +9,9 @@ import (
 )
 
 type candidate struct {
-	physical uintptr
-	info     DeviceInfo
+	physical         uintptr
+	info             DeviceInfo
+	presentExtension string
 }
 
 func chooseDevice(candidates []candidate) (candidate, bool) {
@@ -179,5 +180,28 @@ func requiredInstanceExtensions(available map[string]bool) ([]string, error) {
 			return nil, fmt.Errorf("Vulkan 缺少实例扩展 %s", name)
 		}
 	}
+	// Present fences need a complete dependency chain. Keep initialization
+	// working on older drivers that do not expose these optional extensions.
+	if available["VK_KHR_get_physical_device_properties2"] && available["VK_KHR_get_surface_capabilities2"] && (available["VK_EXT_surface_maintenance1"] || available["VK_KHR_surface_maintenance1"]) {
+		needed = append(needed, "VK_KHR_get_physical_device_properties2", "VK_KHR_get_surface_capabilities2")
+		for _, name := range []string{"VK_EXT_surface_maintenance1", "VK_KHR_surface_maintenance1"} {
+			if available[name] {
+				needed = append(needed, name)
+			}
+		}
+	}
 	return needed, nil
+}
+
+func presentFenceExtension(instance, device map[string]bool) string {
+	if !instance["VK_KHR_get_physical_device_properties2"] || !instance["VK_KHR_get_surface_capabilities2"] {
+		return ""
+	}
+	if instance["VK_KHR_surface_maintenance1"] && device["VK_KHR_swapchain_maintenance1"] {
+		return "VK_KHR_swapchain_maintenance1"
+	}
+	if instance["VK_EXT_surface_maintenance1"] && device["VK_EXT_swapchain_maintenance1"] {
+		return "VK_EXT_swapchain_maintenance1"
+	}
+	return ""
 }

@@ -14,8 +14,15 @@ import (
 
 func main() {
 	testSurface := flag.Bool("surface", false, "create and destroy an isolated hidden test swapchain")
+	testPresent := flag.Bool("present", false, "submit a solid-color frame in this short-lived process")
 	flag.Parse()
-	info, err := vulkan.InspectHost(*testSurface)
+	var info vulkan.DeviceInfo
+	var err error
+	if *testPresent {
+		info, err = vulkan.ProbePresent()
+	} else {
+		info, err = vulkan.InspectHost(*testSurface)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

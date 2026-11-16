@@ -71,6 +71,17 @@ type extensionProperties struct {
 	Version uint32
 }
 
+type features2 struct {
+	SType    uint32
+	Next     unsafe.Pointer
+	Features [55]uint32
+}
+type swapchainMaintenanceFeatures struct {
+	SType                 uint32
+	Next                  unsafe.Pointer
+	SwapchainMaintenance1 uint32
+}
+
 // Vulkan writes the fixed-size VkPhysicalDeviceProperties; the aligned tail is
 // larger than the 1.0 structure and is deliberately not interpreted here.
 type physicalProperties struct {
@@ -91,6 +102,7 @@ type DeviceInfo struct {
 	Swapchain              bool           `json:"swapchain"`
 	ExternalMemoryWin32    bool           `json:"external_memory_win32"`
 	ExternalSemaphoreWin32 bool           `json:"external_semaphore_win32"`
+	PresentFence           bool           `json:"present_fence"`
 	TestSurface            *SwapchainInfo `json:"test_surface,omitempty"`
 }
 
@@ -181,6 +193,10 @@ func OpenHost() (_ *Host, err error) {
 	if err != nil {
 		return nil, err
 	}
+	enabledInstance := make(map[string]bool, len(required))
+	for _, name := range required {
+		enabledInstance[name] = true
+	}
 	instanceNames := make([]*byte, len(required))
 	for i, name := range required {
 		instanceNames[i] = cstring(name)
@@ -224,6 +240,10 @@ func OpenHost() (_ *Host, err error) {
 	if err != nil {
 		return nil, err
 	}
+	var getFeatures2 uintptr
+	if enabledInstance["VK_KHR_get_physical_device_properties2"] {
+		getFeatures2, _ = getInstanceProc(get, h.instance, "vkGetPhysicalDeviceFeatures2KHR")
+	}
 	createDevice, err := getInstanceProc(get, h.instance, "vkCreateDevice")
 	if err != nil {
 		return nil, err
@@ -266,7 +286,20 @@ func OpenHost() (_ *Host, err error) {
 		if !ext["VK_KHR_swapchain"] {
 			continue
 		}
-		candidates = append(candidates, candidate{physical: physical, info: DeviceInfo{Name: stringBytes(p.DeviceName[:]), APIVersion: p.APIVersion, DriverVersion: p.DriverVersion, VendorID: p.VendorID, DeviceID: p.DeviceID, DeviceType: p.DeviceType, GraphicsQueueFamily: family, Swapchain: true, ExternalMemoryWin32: ext["VK_KHR_external_memory_win32"], ExternalSemaphoreWin32: ext["VK_KHR_external_semaphore_win32"]}})
+		presentExtension := presentFenceExtension(enabledInstance, ext)
+		if presentExtension != "" && getFeatures2 != 0 {
+			maintenance := swapchainMaintenanceFeatures{SType: 1000275000}
+			features := features2{SType: 1000059000, Next: unsafe.Pointer(&maintenance)}
+			_, e = call(getFeatures2, physical, uintptr(unsafe.Pointer(&features)))
+			runtime.KeepAlive(features)
+			runtime.KeepAlive(maintenance)
+			if e != nil || maintenance.SwapchainMaintenance1 == 0 {
+				presentExtension = ""
+			}
+		} else {
+			presentExtension = ""
+		}
+		candidates = append(candidates, candidate{physical: physical, presentExtension: presentExtension, info: DeviceInfo{Name: stringBytes(p.DeviceName[:]), APIVersion: p.APIVersion, DriverVersion: p.DriverVersion, VendorID: p.VendorID, DeviceID: p.DeviceID, DeviceType: p.DeviceType, GraphicsQueueFamily: family, Swapchain: true, ExternalMemoryWin32: ext["VK_KHR_external_memory_win32"], ExternalSemaphoreWin32: ext["VK_KHR_external_semaphore_win32"], PresentFence: presentExtension != ""}})
 	}
 	chosen, ok := chooseDevice(candidates)
 	if !ok {
@@ -277,7 +310,15 @@ func OpenHost() (_ *Host, err error) {
 	qci := queueCreateInfo{SType: 2, FamilyIndex: h.info.GraphicsQueueFamily, QueueCount: 1, Priorities: &priority}
 	name := cstring("VK_KHR_swapchain")
 	names := []*byte{name}
-	dci := deviceCreateInfo{SType: 3, QueueCreateInfoCount: 1, QueueCreateInfos: &qci, ExtensionCount: 1, ExtensionNames: &names[0]}
+	var maintenance swapchainMaintenanceFeatures
+	if chosen.presentExtension != "" {
+		names = append(names, cstring(chosen.presentExtension))
+		maintenance = swapchainMaintenanceFeatures{SType: 1000275000, SwapchainMaintenance1: 1}
+	}
+	dci := deviceCreateInfo{SType: 3, QueueCreateInfoCount: 1, QueueCreateInfos: &qci, ExtensionCount: uint32(len(names)), ExtensionNames: &names[0]}
+	if chosen.presentExtension != "" {
+		dci.Next = unsafe.Pointer(&maintenance)
+	}
 	var device uintptr
 	r, err = call(createDevice, h.physical, uintptr(unsafe.Pointer(&dci)), 0, uintptr(unsafe.Pointer(&device)))
 	runtime.KeepAlive(dci)
@@ -285,6 +326,7 @@ func OpenHost() (_ *Host, err error) {
 	runtime.KeepAlive(names)
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(priority)
+	runtime.KeepAlive(maintenance)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +357,7 @@ func InspectHost(testSurface bool) (DeviceInfo, error) {
 	info := h.Info()
 	if testSurface {
 		var surface SwapchainInfo
-		surface, err = inspectHiddenSurface(h)
+		surface, err = inspectHiddenSurface(h, false)
 		if err != nil {
 			_ = h.Close()
 			return DeviceInfo{}, err
@@ -328,11 +370,33 @@ func InspectHost(testSurface bool) (DeviceInfo, error) {
 	return info, nil
 }
 
+// ProbePresent is only for a short-lived subprocess. On a GPU timeout it
+// leaves pending native resources intact and the subprocess must terminate.
+func ProbePresent() (DeviceInfo, error) {
+	h, err := OpenHost()
+	if err != nil {
+		return DeviceInfo{}, err
+	}
+	info := h.Info()
+	surface, err := inspectHiddenSurface(h, true)
+	if err != nil {
+		_ = h.Close()
+		return DeviceInfo{}, err
+	}
+	info.TestSurface = &surface
+	if err = h.Close(); err != nil {
+		return DeviceInfo{}, err
+	}
+	return info, nil
+}
+
 func (h *Host) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for swapchain := range h.swapchains {
-		swapchain.closeLocked()
+		if err := swapchain.closeLocked(); err != nil {
+			return err
+		}
 	}
 	if h.device != 0 && h.destroyDevice != 0 {
 		_, _ = call(h.destroyDevice, h.device, 0)

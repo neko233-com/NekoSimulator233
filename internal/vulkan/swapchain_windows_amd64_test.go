@@ -128,7 +128,7 @@ func TestLiveSwapchainOnOwnedHiddenWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer h.Close()
-	probe, err := inspectHiddenSurface(h)
+	probe, err := inspectHiddenSurface(h, false)
 	if err != nil || probe.Width == 0 || probe.Height == 0 || probe.ImageCount == 0 {
 		t.Fatalf("hidden surface probe %+v: %v", probe, err)
 	}
@@ -141,6 +141,14 @@ func TestLiveSwapchainOnOwnedHiddenWindow(t *testing.T) {
 	}
 	if _, err = h.CreateSwapchain(hwnd); err == nil {
 		t.Fatal("created duplicate swapchain for window")
+	}
+	if h.info.PresentFence {
+		if err := s.PresentClear([4]float32{1, 0.25, 0.5, 1}); err != nil {
+			t.Fatalf("clear and present: %v", err)
+		}
+		t.Log("submitted a clear and waited for rendering and presentation fences")
+	} else {
+		t.Log("presentation-fence extension unavailable; clear/present skipped")
 	}
 	t.Logf("created hidden swapchain: %dx%d images=%d format=%d", s.extent.Width, s.extent.Height, len(s.images), s.format.Format)
 	if err = h.Close(); err != nil {

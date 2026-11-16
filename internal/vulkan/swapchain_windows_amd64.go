@@ -70,13 +70,16 @@ type Swapchain struct {
 	images                           []uint64
 	extent                           extent2D
 	format                           surfaceFormat
+	pending                          *presentResources
+	poisoned                         bool
 }
 
 type SwapchainInfo struct {
-	Width      uint32 `json:"width"`
-	Height     uint32 `json:"height"`
-	Format     uint32 `json:"format"`
-	ImageCount int    `json:"image_count"`
+	Width          uint32 `json:"width"`
+	Height         uint32 `json:"height"`
+	Format         uint32 `json:"format"`
+	ImageCount     int    `json:"image_count"`
+	ClearSubmitted bool   `json:"clear_submitted,omitempty"`
 }
 
 func (s *Swapchain) Info() SwapchainInfo {
@@ -238,7 +241,7 @@ func (h *Host) CreateSwapchain(hwnd uintptr) (_ *Swapchain, err error) {
 	s := &Swapchain{host: h, hwnd: hwnd}
 	defer func() {
 		if err != nil {
-			s.closeLocked()
+			_ = s.closeLocked()
 		}
 	}()
 	get := h.getInstanceProcAddr
@@ -349,7 +352,13 @@ func (h *Host) CreateSwapchain(hwnd uintptr) (_ *Swapchain, err error) {
 	return s, nil
 }
 
-func (s *Swapchain) closeLocked() {
+func (s *Swapchain) closeLocked() error {
+	if s.pending != nil {
+		if err := s.pending.releaseIfSafe(s.host); err != nil {
+			return err
+		}
+		s.pending = nil
+	}
 	if s.swapchain != 0 {
 		_, _ = call(s.destroySwapchain, s.host.device, uintptr(s.swapchain), 0)
 		s.swapchain = 0
@@ -360,10 +369,10 @@ func (s *Swapchain) closeLocked() {
 	}
 	s.images = nil
 	delete(s.host.swapchains, s)
+	return nil
 }
 func (s *Swapchain) Close() error {
 	s.host.mu.Lock()
 	defer s.host.mu.Unlock()
-	s.closeLocked()
-	return nil
+	return s.closeLocked()
 }

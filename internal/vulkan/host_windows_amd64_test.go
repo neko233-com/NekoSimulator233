@@ -19,6 +19,8 @@ func TestVulkanWin64ABI(t *testing.T) {
 		{"VkInstanceCreateInfo size", unsafe.Sizeof(instanceCreateInfo{}), 64},
 		{"VkDeviceQueueCreateInfo size", unsafe.Sizeof(queueCreateInfo{}), 40},
 		{"VkDeviceCreateInfo size", unsafe.Sizeof(deviceCreateInfo{}), 72},
+		{"VkPhysicalDeviceFeatures2 size", unsafe.Sizeof(features2{}), 240},
+		{"VkPhysicalDeviceSwapchainMaintenance1Features size", unsafe.Sizeof(swapchainMaintenanceFeatures{}), 24},
 		{"VkQueueFamilyProperties size", unsafe.Sizeof(queueFamilyProperties{}), 24},
 		{"VkExtensionProperties size", unsafe.Sizeof(extensionProperties{}), 260},
 		{"VkPhysicalDeviceProperties deviceName", unsafe.Offsetof(physicalProperties{}.DeviceName), 20},
@@ -60,6 +62,32 @@ func TestRequiredWin32SurfaceExtensions(t *testing.T) {
 	names, err := requiredInstanceExtensions(map[string]bool{"VK_KHR_surface": true, "VK_KHR_win32_surface": true})
 	if err != nil || len(names) != 2 || names[0] != "VK_KHR_surface" || names[1] != "VK_KHR_win32_surface" {
 		t.Fatalf("unexpected instance extensions %v: %v", names, err)
+	}
+}
+
+func TestPresentFenceExtensionRequiresFullDependencyChain(t *testing.T) {
+	instance := map[string]bool{"VK_KHR_surface": true, "VK_KHR_win32_surface": true, "VK_KHR_get_physical_device_properties2": true, "VK_KHR_get_surface_capabilities2": true, "VK_EXT_surface_maintenance1": true}
+	device := map[string]bool{"VK_EXT_swapchain_maintenance1": true}
+	names, err := requiredInstanceExtensions(instance)
+	if err != nil || len(names) != 5 {
+		t.Fatalf("instance extensions %v: %v", names, err)
+	}
+	if got := presentFenceExtension(instance, device); got != "VK_EXT_swapchain_maintenance1" {
+		t.Fatalf("extension = %q", got)
+	}
+	delete(instance, "VK_KHR_get_surface_capabilities2")
+	if got := presentFenceExtension(instance, device); got != "" {
+		t.Fatalf("missing dependency accepted: %q", got)
+	}
+	instance["VK_KHR_get_surface_capabilities2"] = true
+	delete(device, "VK_EXT_swapchain_maintenance1")
+	if got := presentFenceExtension(instance, device); got != "" {
+		t.Fatalf("missing device extension accepted: %q", got)
+	}
+	instance["VK_KHR_surface_maintenance1"] = true
+	device["VK_KHR_swapchain_maintenance1"] = true
+	if got := presentFenceExtension(instance, device); got != "VK_KHR_swapchain_maintenance1" {
+		t.Fatalf("KHR promotion not selected: %q", got)
 	}
 }
 
