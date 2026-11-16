@@ -12,10 +12,11 @@ import (
 
 func TestTapTapInstallIsIdempotentAndCleansStaging(t *testing.T) {
 	installed := false
-	downloads, installs := 0, 0
+	prepares, downloads, installs := 0, 0, 0
 	var path string
 	ops := tapTapSetupOps{
 		installed: func(context.Context) (bool, error) { return installed, nil },
+		prepare:   func(context.Context) error { prepares++; return nil },
 		download: func(_ context.Context, w io.Writer) (provision.DownloadResult, error) {
 			downloads++
 			_, err := w.Write([]byte("APK"))
@@ -46,8 +47,23 @@ func TestTapTapInstallIsIdempotentAndCleansStaging(t *testing.T) {
 		t.Fatalf("staging not removed: %v", err)
 	}
 	result, err = installTapTap(context.Background(), ops)
-	if err != nil || !result.AlreadyInstalled || downloads != 1 || installs != 1 {
+	if err != nil || !result.AlreadyInstalled || prepares != 1 || downloads != 1 || installs != 1 {
 		t.Fatal("installed app was downloaded or replaced again")
+	}
+}
+
+func TestTapTapPreparationFailureSkipsDownload(t *testing.T) {
+	want := errors.New("tools unavailable")
+	ops := tapTapSetupOps{
+		installed: func(context.Context) (bool, error) { return false, nil },
+		prepare:   func(context.Context) error { return want },
+		download: func(context.Context, io.Writer) (provision.DownloadResult, error) {
+			t.Fatal("download started without its verification tool")
+			return provision.DownloadResult{}, nil
+		},
+	}
+	if _, err := installTapTap(context.Background(), ops); !errors.Is(err, want) {
+		t.Fatalf("preparation failure lost: %v", err)
 	}
 }
 

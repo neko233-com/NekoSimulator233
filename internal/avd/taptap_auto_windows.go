@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -173,7 +172,7 @@ func (m Manager) scheduleTapTap(instance Instance) {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), TapTapInstallTimeout)
 		defer cancel()
 		_ = m.runPendingTapTap(ctx, instance, func(ctx context.Context, i Instance) error {
 			_, err := m.installTapTapLocked(ctx, i)

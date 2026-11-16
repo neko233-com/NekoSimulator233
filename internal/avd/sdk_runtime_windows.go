@@ -13,6 +13,8 @@ import (
 
 type sdkRuntimePackage struct{ id, directory, executable string }
 
+const tapTapBuildToolsPackage = "build-tools;35.0.0"
+
 var sdkRuntimePackages = []sdkRuntimePackage{
 	{id: "platform-tools", directory: "platform-tools", executable: "adb.exe"},
 	{id: "emulator", directory: "emulator", executable: "emulator.exe"},
@@ -111,7 +113,7 @@ func missingSDKRuntime(root string) ([]sdkRuntimePackage, error) {
 }
 
 func runSDKPackageInstall(ctx context.Context, root, pkg string, notify func(int)) error {
-	if pkg != "platform-tools" && pkg != "emulator" {
+	if pkg != "platform-tools" && pkg != "emulator" && pkg != tapTapBuildToolsPackage {
 		return errors.New("不支持的 SDK 运行组件")
 	}
 	java, err := sdkManagerJava()

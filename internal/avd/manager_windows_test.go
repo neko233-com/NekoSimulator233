@@ -46,6 +46,8 @@ func TestMain(m *testing.M) {
 					target = filepath.Join(root, "platform-tools", "adb.exe")
 				case "emulator":
 					target = filepath.Join(root, "emulator", "emulator.exe")
+				case tapTapBuildToolsPackage:
+					target = filepath.Join(root, "build-tools", "35.0.0", "aapt.exe")
 				}
 			}
 			if target == "" || os.MkdirAll(filepath.Dir(target), 0700) != nil || os.WriteFile(target, []byte("fake runtime"), 0600) != nil {

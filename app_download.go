@@ -89,7 +89,7 @@ func (a *app) installTapTap() {
 		manager, err := selectedManager(name)
 		var result avd.TapTapInstallResult
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), avd.TapTapInstallTimeout)
 			instance, readyErr := manager.Ready(ctx)
 			err = readyErr
 			if err == nil {

@@ -18,6 +18,9 @@ import (
 
 const tapTapPackage = "com.taptap"
 
+// TapTapInstallTimeout includes SDK tool preparation and the APK download.
+const TapTapInstallTimeout = 15 * time.Minute
+
 type TapTapInstallResult struct {
 	AlreadyInstalled bool   `json:"already_installed"`
 	DownloadedBytes  int64  `json:"downloaded_bytes,omitempty"`
@@ -26,6 +29,7 @@ type TapTapInstallResult struct {
 
 type tapTapSetupOps struct {
 	installed func(context.Context) (bool, error)
+	prepare   func(context.Context) error
 	download  func(context.Context, io.Writer) (provision.DownloadResult, error)
 	verify    func(context.Context, string) error
 	install   func(context.Context, string) error
@@ -34,7 +38,7 @@ type tapTapSetupOps struct {
 // InstallTapTap downloads the official APK into a temporary file, validates
 // the package name and installs it without replacing an existing application.
 func (m Manager) InstallTapTap(ctx context.Context, instance Instance) (TapTapInstallResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, TapTapInstallTimeout)
 	defer cancel()
 	var result TapTapInstallResult
 	err := m.withTapTapInstallLock(ctx, func(ctx context.Context) error {
@@ -57,6 +61,7 @@ func (m Manager) installTapTapLocked(ctx context.Context, instance Instance) (Ta
 			})
 			return installed, err
 		},
+		prepare:  m.installTapTapBuildTools,
 		download: provision.DownloadTapTap,
 		verify:   m.verifyTapTapAPK,
 		install: func(ctx context.Context, path string) error {
@@ -85,6 +90,11 @@ func installTapTap(ctx context.Context, ops tapTapSetupOps) (TapTapInstallResult
 	}
 	if installed {
 		return TapTapInstallResult{AlreadyInstalled: true}, nil
+	}
+	if ops.prepare != nil {
+		if err := ops.prepare(ctx); err != nil {
+			return TapTapInstallResult{}, fmt.Errorf("准备 TapTap 安装工具失败：%w", err)
+		}
 	}
 	f, err := os.CreateTemp("", "neko-taptap-*.apk")
 	if err != nil {
@@ -130,31 +140,44 @@ func (m Manager) hasTapTap(ctx context.Context, instance Instance) (bool, error)
 }
 
 func (m Manager) verifyTapTapAPK(ctx context.Context, path string) error {
-	entries, err := os.ReadDir(filepath.Join(m.SDK, "build-tools"))
+	aapt, err := findAAPT(m.SDK)
 	if err != nil {
-		return errors.New("缺少 Android SDK Build Tools，无法检查 TapTap 安装包")
+		return err
+	}
+	if aapt == "" {
+		return errors.New("缺少 Android SDK Build Tools 的 aapt.exe，无法检查 TapTap 安装包")
+	}
+	cmd := exec.CommandContext(ctx, aapt, "dump", "badging", path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("无法检查 TapTap 安装包：%w", err)
+	}
+	if !isTapTapBadging(out) {
+		return errors.New("下载的安装包不是预期的 TapTap 应用")
+	}
+	return nil
+}
+
+func findAAPT(root string) (string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "build-tools"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("无法读取 Android SDK Build Tools：%w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		aapt := filepath.Join(m.SDK, "build-tools", entry.Name(), "aapt.exe")
-		if !exists(aapt) {
-			continue
+		aapt := filepath.Join(root, "build-tools", entry.Name(), "aapt.exe")
+		if exists(aapt) {
+			return aapt, nil
 		}
-		cmd := exec.CommandContext(ctx, aapt, "dump", "badging", path)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		out, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("无法检查 TapTap 安装包：%w", err)
-		}
-		if !isTapTapBadging(out) {
-			return errors.New("下载的安装包不是预期的 TapTap 应用")
-		}
-		return nil
 	}
-	return errors.New("缺少 Android SDK Build Tools 的 aapt.exe，无法检查 TapTap 安装包")
+	return "", nil
 }
 
 func isTapTapBadging(out []byte) bool {
