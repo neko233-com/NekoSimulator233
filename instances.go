@@ -132,6 +132,7 @@ func (a *app) createIndependent() {
 		a.window.Update(func() {
 			a.busy, a.sdkCancel = false, nil
 			if created {
+				a.showCreate = false
 				if err != nil {
 					items = append(append([]avd.InstanceSummary(nil), a.available...), avd.InstanceSummary{Name: name, State: "stopped"})
 				}

@@ -43,12 +43,15 @@ var errInstanceNotRunning = errors.New("项目实例未运行")
 
 func DiscoverManager() (Manager, error) {
 	var candidates []string
+	local := os.Getenv("LOCALAPPDATA")
+	if local != "" {
+		candidates = append(candidates, filepath.Join(local, "NekoSimulator233-data", "runtime", "sdk"))
+	}
 	for _, key := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
 		if value := os.Getenv(key); value != "" {
 			candidates = append(candidates, value)
 		}
 	}
-	local := os.Getenv("LOCALAPPDATA")
 	if local != "" {
 		candidates = append(candidates, filepath.Join(local, "Android", "Sdk"))
 	}

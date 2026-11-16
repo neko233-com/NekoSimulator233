@@ -30,6 +30,8 @@ type app struct {
 	available        []avd.InstanceSummary
 	newInstance      string
 	newSystem        string
+	deviceTools      bool
+	showCreate       bool
 	backupCancel     context.CancelFunc
 	closeAfterBackup bool
 	sdkCancel        context.CancelFunc
@@ -215,9 +217,16 @@ func (a *app) refresh() {
 		return
 	}
 	a.busy = true
-	a.message = "正在读取独立实例…"
+	a.message = "正在准备运行环境并读取设备…"
 	go func() {
-		manager, err := avd.DiscoverManager()
+		executable, err := os.Executable()
+		if err == nil {
+			err = avd.PrepareBundledRuntime(context.Background(), filepath.Join(filepath.Dir(executable), "android-runtime.zip"), os.Getenv("LOCALAPPDATA"))
+		}
+		var manager avd.Manager
+		if err == nil {
+			manager, err = avd.DiscoverManager()
+		}
 		var available []avd.InstanceSummary
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -238,7 +247,7 @@ func (a *app) applyIndependentRefresh(available []avd.InstanceSummary, err error
 	a.message = "已读取独立实例列表"
 }
 
-func (a *app) view(c *ui.Context) {
+func (a *app) toolsView(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Padding(28).Gap(12).Children(func() {
 		ui.Text(c, "NekoSimulator233").FontSize(26).Bold()
@@ -414,7 +423,7 @@ func main() {
 		a.suppressedUpdate = updateKey(m)
 	}
 	mygo.App.WhenReady(func() {
-		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "NekoSimulator233", Width: 760, Height: 500, Content: ui.View(a.view)})
+		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "NekoSimulator233", Width: 868, Height: 584, Content: ui.View(a.view)})
 		a.window.OnClose(func(e *mygo.CloseEvent) {
 			if a.updateInProgress {
 				a.closeAfterUpdate = true

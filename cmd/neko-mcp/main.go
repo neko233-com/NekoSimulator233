@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,7 +49,16 @@ func main() {
 		}
 		return
 	}
-	server := agent.New(avd.DiscoverManager)
+	server := agent.New(func() (avd.Manager, error) {
+		executable, err := os.Executable()
+		if err != nil {
+			return avd.Manager{}, err
+		}
+		if err := avd.PrepareBundledRuntime(context.Background(), filepath.Join(filepath.Dir(executable), "android-runtime.zip"), os.Getenv("LOCALAPPDATA")); err != nil {
+			return avd.Manager{}, err
+		}
+		return avd.DiscoverManager()
+	})
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

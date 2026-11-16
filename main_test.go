@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"image/png"
+	"os"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -25,8 +27,29 @@ func TestIndependentRefreshDoesNotDependOnMuMu(t *testing.T) {
 
 func TestInstanceView(t *testing.T) {
 	a := &app{message: "已连接", available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped", API: 34}}}
-	tester := ui.NewTester(a.view, 760, 500)
-	for _, want := range []string{"NekoSimulator233", "已连接", "安装 Google Play 镜像…", "资源设置…", "显示设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "导入文件…", "常用应用状态", "打开 Chrome", "打开 Google Play", "打开 TapTap", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…"} {
+	tester := ui.NewTester(a.view, 868, 584)
+	if path := os.Getenv("NEKO_TEST_DEVICE_PREVIEW"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(f, tester.Image()); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{"NekoSimulator233", "已连接", "＋ 新建设备", "设备操作", "刷新设备", "未开机", "▶ 启动"} {
+		if !tester.HasText(want) {
+			t.Errorf("missing %q in %q", want, tester.Texts())
+		}
+	}
+	if err := tester.Click("设备操作"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"安装 Google Play 镜像…", "资源设置…", "显示设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "导入文件…", "常用应用状态", "打开 Chrome", "打开 Google Play", "打开 TapTap", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…"} {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
@@ -80,6 +103,9 @@ func TestIndependentInstanceChoicesAndKeymaps(t *testing.T) {
 func TestIndependentInstanceSelectionInView(t *testing.T) {
 	a := &app{selected: avd.DefaultName, available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped"}, {Name: "Alpha", State: "stopped"}}}
 	tester := ui.NewTester(a.view, 760, 600)
+	if err := tester.Click("设备操作"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tester.Click("独立实例"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +132,10 @@ func TestNewInstanceSystemChoice(t *testing.T) {
 func TestNewInstanceSystemChoiceInView(t *testing.T) {
 	a := &app{}
 	tester := ui.NewTester(a.view, 760, 650)
-	if err := tester.Click("新实例系统"); err != nil {
+	if err := tester.Click("＋ 新建设备"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("系统版本"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click(systemAndroid11); err != nil {

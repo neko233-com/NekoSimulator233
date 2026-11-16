@@ -1,6 +1,6 @@
 # NekoSimulator233
 
-Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。当前运行时使用本机 Android SDK Emulator、系统镜像和 Windows 虚拟化，实例及数据由本项目独立管理。
+Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。当前运行时使用 Android SDK Emulator、系统镜像和 Windows 虚拟化，实例及数据由本项目独立管理。
 
 独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。通过主窗口或 MCP 新建实例时使用 Android 34/35 的 `google_apis_playstore/x86_64` 镜像；若未安装，则尝试自动安装 Android 34 的官方 Play 镜像。选择 Android 11 时使用对应的 Android 30 Play 镜像，作为 32 位应用兼容路径。首次启动尚未创建的默认实例也会先准备 Play 镜像；准备过程支持进度和取消，Android 启动阶段单独限时三分钟。已创建实例不会自动切换镜像，旧的普通 Google APIs 镜像默认不包含 Play 商店。此路径尚未完成真实镜像下载、Google Play 登录、应用安装或 Vulkan 验证。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，画面窗口均不可见时暂停采集，失焦时释放按住的输入。
 
@@ -51,9 +51,11 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.31
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.31-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.32 -BundleSdkRoot <本机SDK目录>
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.32-x64.msi
 ```
+
+构建默认将本机 SDK 的 Emulator、Platform Tools、Build Tools 35.0.0 和 Android 34 Google Play x86_64 镜像打入 MSI；首次启动时解压到 `%LOCALAPPDATA%/NekoSimulator233-data/runtime/sdk`，随后优先使用该目录。构建机器需要这些完整组件；最终用户不需要另外安装 SDK。压缩包超过 Windows Installer 单文件大小限制时构建会失败。`-WithoutRuntime` 仅用于构建不带运行环境的开发包。SDK 及 Google Play 组件可能受其各自许可约束，构建或分发前须确认使用权；运行时二进制和本地 MSI 不提交仓库。带真实镜像的 MSI 打包、首次启动和升级迁移尚未完成验证；现有内置运行目录会保留，更新不会自动替换它。
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 

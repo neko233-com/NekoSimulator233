@@ -21,6 +21,12 @@
           <File Id="JDKConfiguratorScript" Name="configure-jdk.ps1" Source="$(var.ConfigureJDK)" />
           <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="JDKConfiguratorInstalled" Type="integer" Value="1" KeyPath="yes" />
         </Component>
+        <?if $(var.IncludeRuntime) = 1 ?>
+        <Component Id="AndroidRuntime" Guid="6baaece2-071f-4479-9e1b-bd6d6479b847">
+          <File Id="AndroidRuntimeBundle" Name="android-runtime.zip" Source="$(var.RuntimeBundle)" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="RuntimeInstalled" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <?endif?>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
@@ -32,6 +38,6 @@
         </Component>
       </Directory>
     </StandardDirectory>
-    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="MyGoLicense" /><ComponentRef Id="JDKConfigurator" /><ComponentRef Id="Shortcut" /></Feature>
+    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="MyGoLicense" /><ComponentRef Id="JDKConfigurator" /><ComponentRef Id="Shortcut" /><?if $(var.IncludeRuntime) = 1 ?><ComponentRef Id="AndroidRuntime" /><?endif?></Feature>
   </Package>
 </Wix>
