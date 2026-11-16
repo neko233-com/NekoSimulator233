@@ -27,6 +27,7 @@ type app struct {
 	message       string
 	updateMessage string
 	viewers       map[string]*viewer
+	resources     *resourceSettings
 }
 
 func (a *app) startIndependent() {
@@ -224,6 +225,9 @@ func (a *app) view(c *ui.Context) {
 			a.stopIndependent()
 		}
 		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("resource-settings"), "资源设置…").Disabled(a.busy).Clicked() {
+				a.openResources()
+			}
 			if ui.Button(c.Key("install-apk"), "安装 APK…").Disabled(a.busy).Clicked() {
 				a.chooseAPK(false)
 			}

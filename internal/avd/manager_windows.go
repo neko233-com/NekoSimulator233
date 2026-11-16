@@ -466,7 +466,15 @@ func (m Manager) Start(ctx context.Context) (Instance, error) {
 	if err != nil {
 		return Instance{}, err
 	}
-	cmd := exec.Command(filepath.Join(m.SDK, "emulator", "emulator.exe"), "-avd", m.Name, "-no-window", "-no-boot-anim", "-no-snapshot", "-gpu", "host", "-feature", "Vulkan", "-port", strconv.Itoa(port), "-grpc", strconv.Itoa(grpcPort), "-grpc-use-token")
+	args := []string{"-avd", m.Name, "-no-window", "-no-boot-anim", "-no-snapshot", "-gpu", "host", "-feature", "Vulkan", "-port", strconv.Itoa(port), "-grpc", strconv.Itoa(grpcPort), "-grpc-use-token"}
+	resources, err := resourcesOverride(filepath.Join(m.Home, m.Name+".avd"))
+	if err != nil {
+		return Instance{}, err
+	}
+	if resources != nil {
+		args = append(args, "-memory", strconv.Itoa(resources.RAMMiB), "-cores", strconv.Itoa(resources.Cores))
+	}
+	cmd := exec.Command(filepath.Join(m.SDK, "emulator", "emulator.exe"), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Env = append(os.Environ(), "ANDROID_AVD_HOME="+m.Home, "ANDROID_HOME="+m.SDK)
 	if err := cmd.Start(); err != nil {

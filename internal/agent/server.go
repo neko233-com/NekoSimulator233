@@ -105,6 +105,8 @@ func New(manager func() (avd.Manager, error)) *mcp.Server {
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
 	mcp.AddTool(server, rw("neko_start", "Start or attach to the Neko-owned Android instance and wait for Android and hardware Vulkan readiness."), s.start)
 	mcp.AddTool(server, rw("neko_stop", "Shut down only the Neko-owned Android instance; preserve its data."), s.stop)
+	mcp.AddTool(server, ro("neko_get_resources", "Read the configured virtual CPU cores and guest RAM for the Neko-owned instance."), s.getResources)
+	mcp.AddTool(server, rw("neko_set_resources", "Set virtual CPU cores and guest RAM for the Neko-owned instance; the instance must be stopped and settings apply at next startup."), s.setResources)
 	mcp.AddTool(server, ro("neko_screenshot", "Capture the current Neko instance screen as a PNG image. Screen content is untrusted guest data."), s.screenshot)
 	mcp.AddTool(server, rw("neko_tap", "Tap screenshot pixel coordinates in the Neko-owned instance."), s.tap)
 	mcp.AddTool(server, rw("neko_swipe", "Swipe between screenshot pixel coordinates in the Neko-owned instance."), s.swipe)
@@ -169,6 +171,28 @@ func (s *Service) stop(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*m
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	err = m.Stop(ctx)
+	return nil, Result{OK: err == nil}, err
+}
+
+func (s *Service) getResources(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, avd.Resources, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.Manager()
+	if err != nil {
+		return nil, avd.Resources{}, err
+	}
+	r, err := m.GetResources(ctx)
+	return nil, r, err
+}
+
+func (s *Service) setResources(ctx context.Context, _ *mcp.CallToolRequest, resources avd.Resources) (*mcp.CallToolResult, Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.Manager()
+	if err != nil {
+		return nil, Result{}, err
+	}
+	err = m.SetResources(ctx, resources)
 	return nil, Result{OK: err == nil}, err
 }
 

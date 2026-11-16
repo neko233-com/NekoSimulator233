@@ -362,6 +362,13 @@ func (m Manager) ExportBackup(ctx context.Context, target string) error {
 	if err != nil {
 		return err
 	}
+	resources, err := resourcesOverride(dir)
+	if err != nil {
+		return err
+	}
+	if resources != nil {
+		settings.Cores, settings.RAM = resources.Cores, resources.RAMMiB
+	}
 	// The emulator recreates QCOW2 overlays if this cache is absent or differs
 	// from the system image build. Keep its exact value to avoid a silent wipe.
 	versionFile, err := openOfflineImage(filepath.Join(dir, "version_num.cache"))

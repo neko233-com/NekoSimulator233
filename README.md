@@ -4,6 +4,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 独立模式需要 Android SDK 的 `emulator`、`platform-tools` 和 Android 34 或 35 `google_apis/x86_64` 系统镜像，以及可用的硬件 Vulkan GPU 和虚拟化。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，窗口最小化或隐藏时暂停采集，失焦时释放按住的输入。
 
+主窗口的“资源设置…”可调整独立实例的虚拟 CPU 核数和 Android 客户机内存；关闭独立实例后保存，下次启动生效。新实例默认 4 核、2048 MiB；已有实例沿用当前配置，直到主动保存新设置。设置保存在实例目录中，不修改其 Android 数据盘；项目的 `.nekobak` 备份会保留这些值。客户机内存设置不等于宿主实际内存占用，过低可能导致应用运行不稳定。
+
 独立实例启动后，可在主窗口选择“安装 APK…”安装本地 APK；已有同名应用时安装会拒绝覆盖。需要升级已有应用时使用“更新 APK…”，Android 仍会检查包签名和版本。安装结果显示在主窗口，不影响 MuMu 实例。
 
 独立实例窗口的“编辑键位”可将画面位置绑定到键盘：点击画面位置，再按对应按键；“删除键位”选择后按要删除的键。编辑界面也可选择“设置 WASD 摇杆”，点击游戏摇杆中心，再用缩小或放大按钮调整半径；编辑时画面显示键位和摇杆范围，“完成键位”退出编辑。WASD 已有单点绑定时需先删除这些绑定。绑定位置按画面比例保存到 `%LOCALAPPDATA%/NekoSimulator233-data/keymap.json`，其他未绑定按键仍直通 Android。摇杆占用一个触点，可与鼠标和其他绑定键同时使用；失焦或画面尺寸变化时释放输入。当前所有独立实例共用一份键位配置，尚无按键组合或按游戏切换方案。GUI 与 Agent 对同一实例的触屏手势互斥，忙时会返回具体原因。
@@ -15,21 +17,21 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.12
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.12-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.13
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.13-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.13-x64.msi -Version 0.1.13
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.14-x64.msi -Version 0.1.14
 ```
 
 安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
 
 ## Agent 控制
 
-安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_status`、`neko_start`、`neko_stop`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
+安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_status`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
 `neko_find_ui` 和 `neko_tap_ui` 按 Android 无障碍层级查找元素，例如 `{"resource_id":"com.example:id/play"}` 或 `{"text":"开始","package":"com.example"}`。至少指定 `text`、`resource_id`、`description` 之一；多个条件按区分大小写的精确匹配组合。`neko_find_ui` 返回匹配元素及画面范围；`neko_tap_ui` 仅在恰好匹配一个启用的元素时点击其画面内部分的中心。层级读取与点击之间界面可能发生变化；自绘游戏画面也可能不暴露无障碍节点，这些场景仍可使用截图和坐标操作。
 

@@ -16,6 +16,13 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if record := os.Getenv("NEKO_TEST_FAKE_EMULATOR_RECORD"); record != "" {
+		args, err := json.Marshal(os.Args[1:])
+		if err != nil || os.WriteFile(record, args, 0600) != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
 	if record := os.Getenv("NEKO_TEST_FAKE_ADB_RECORD"); record != "" {
 		args, err := json.Marshal(os.Args[1:])
 		if err != nil || os.WriteFile(record, args, 0600) != nil {
