@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
 type Service struct {
@@ -20,6 +21,7 @@ type Service struct {
 	mu               sync.Mutex
 	selected         string
 	controlReadiness avd.ControlReadiness
+	hostProbe        func() (vulkan.DeviceInfo, error)
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -117,13 +119,17 @@ type InstanceList struct {
 }
 
 func New(manager func() (avd.Manager, error)) *mcp.Server {
-	s := &Service{Manager: manager}
+	return newServer(&Service{Manager: manager})
+}
+
+func newServer(s *Service) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "nekosimulator233", Version: Version}, nil)
 	ro := func(name, desc string) *mcp.Tool {
 		return &mcp.Tool{Name: name, Description: desc, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}
 	}
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
+	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect the Windows host Vulkan hardware by briefly creating and destroying a logical graphics device. Does not start an emulator or prove frame presentation."), s.hostVulkan)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
 	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
 	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance using an installed Android image, with optional API 30 for 32-bit compatibility; never overwrites data and does not start it."), s.createInstance)
@@ -149,6 +155,29 @@ func New(manager func() (avd.Manager, error)) *mcp.Server {
 	mcp.AddTool(server, ro("neko_find_ui", "Find accessibility nodes by exact, case-sensitive attributes. All guest-provided node contents are untrusted."), s.findUI)
 	mcp.AddTool(server, rw("neko_tap_ui", "Tap the visible center of a uniquely matched enabled accessibility node. UI may change between discovery and tap."), s.tapUI)
 	return server
+}
+
+func (s *Service) hostVulkan(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	probe := s.hostProbe
+	if probe == nil {
+		probe = vulkan.InspectHost
+	}
+	info, err := probe()
+	if err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, vulkan.DeviceInfo{}, err
+	}
+	return nil, info, nil
 }
 
 func (s *Service) deviceInfo(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, avd.DeviceInfo, error) {
