@@ -61,6 +61,9 @@ type viewer struct {
 	streamCancel  context.CancelFunc
 	captureRate   atomic.Int32
 	rateChanged   chan struct{}
+	visibilityCh  chan struct{}
+	visEpoch      atomic.Uint64
+	previewEpoch  uint64 // owned by the capture goroutine
 	hidden        atomic.Bool
 	minimized     atomic.Bool
 	bindings      map[uint16]mappedPoint
@@ -76,7 +79,7 @@ type viewer struct {
 }
 
 func openViewer(name string, source display.Session, bindingsPath string, onClosed func()) *viewer {
-	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), message: "正在读取画面…"}
+	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), visibilityCh: make(chan struct{}, 1), message: "正在读取画面…"}
 	if _, ok := source.(display.MultiTouch); ok {
 		v.baseKeymap = bindingsPath
 		v.profile = defaultKeymapProfile
@@ -99,15 +102,54 @@ func openViewer(name string, source display.Session, bindingsPath string, onClos
 		}
 	})
 	v.win.OnBlur(v.releaseHostInput)
-	v.win.OnHide(func() { v.hidden.Store(true); v.cancelStream(); v.releaseHostInput() })
-	v.win.OnShow(func() { v.hidden.Store(false) })
-	v.win.OnMinimize(func() { v.minimized.Store(true); v.cancelStream(); v.releaseHostInput() })
-	v.win.OnRestore(func() { v.minimized.Store(false) })
+	v.win.OnHide(func() { v.hidden.Store(true); v.suspendPresentation() })
+	v.win.OnShow(func() { v.hidden.Store(false); v.notifyVisibility() })
+	v.win.OnMinimize(func() { v.minimized.Store(true); v.suspendPresentation() })
+	v.win.OnRestore(func() { v.minimized.Store(false); v.notifyVisibility() })
 	go v.run()
 	return v
 }
 
 func (v *viewer) stop() { v.once.Do(func() { close(v.done); v.cancelStream() }) }
+
+// Called on the UI thread. Incrementing the epoch also invalidates a capture
+// that was already in flight when the window was hidden.
+func (v *viewer) suspendPresentation() {
+	v.visEpoch.Add(1)
+	v.setFrameSize(0, 0)
+	v.bitmap = nil
+	v.message = "画面采集已暂停"
+	v.releaseHostInput()
+	v.cancelStream()
+	v.notifyVisibility()
+}
+
+func (v *viewer) notifyVisibility() {
+	select {
+	case v.visibilityCh <- struct{}{}:
+	default:
+	}
+}
+
+func (v *viewer) frameCurrent(epoch uint64) bool {
+	return epoch == v.visEpoch.Load() && !v.hidden.Load() && !v.minimized.Load()
+}
+
+// Only the capture goroutine writes to the preview pipe.
+func (v *viewer) syncPreviewVisibility() {
+	epoch := v.visEpoch.Load()
+	if epoch == v.previewEpoch {
+		return
+	}
+	v.previewEpoch = epoch
+	if v.preview != nil {
+		if err := v.preview.inactive(); err != nil {
+			v.preview.close()
+			v.preview = nil
+			v.reportPreview(err)
+		}
+	}
+}
 
 func (v *viewer) cancelStream() {
 	v.streamMu.Lock()
@@ -183,32 +225,77 @@ func (v *viewer) run() {
 			return
 		}
 	}
+	v.runPolling()
+}
+
+type captureRequest struct {
+	buffer *image.RGBA
+	epoch  uint64
+}
+
+type captureResult struct {
+	frame *image.RGBA
+	epoch uint64
+	err   error
+}
+
+// Keep pipe control responsive even when a screenshot request is in flight.
+// A single worker preserves buffer ownership and prevents overlapping captures.
+func (v *viewer) runPolling() {
+	requests := make(chan captureRequest)
+	results := make(chan captureResult)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		for {
+			select {
+			case <-v.done:
+				return
+			case req := <-requests:
+				frame, err := v.source.Capture(req.buffer)
+				select {
+				case results <- captureResult{frame: frame, epoch: req.epoch, err: err}:
+				case <-v.done:
+					return
+				}
+			}
+		}
+	}()
+	defer func() { <-workerDone }()
 	ticker := time.NewTicker(time.Second / time.Duration(v.currentCaptureRate()))
 	defer ticker.Stop()
 	var frames [2]*image.RGBA
 	frameIndex := 0
+	capturing := false
 	for {
 		select {
 		case <-v.done:
 			return
 		case <-v.rateChanged:
 			ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
+		case <-v.visibilityCh:
+			v.syncPreviewVisibility()
 		case <-ticker.C:
-			if v.hidden.Load() || v.minimized.Load() {
+			v.syncPreviewVisibility()
+			if capturing || v.hidden.Load() || v.minimized.Load() {
 				continue
 			}
-			frame, err := v.source.Capture(frames[frameIndex])
 			select {
-			case <-v.done:
-				return
+			case requests <- captureRequest{buffer: frames[frameIndex], epoch: v.visEpoch.Load()}:
+				capturing = true
 			default:
 			}
-			if err != nil {
-				v.report(err)
+		case result := <-results:
+			capturing = false
+			if !v.frameCurrent(result.epoch) {
 				continue
 			}
-			frames[frameIndex] = frame
-			if !v.presentFrame(frame) {
+			if result.err != nil {
+				v.report(result.err)
+				continue
+			}
+			frames[frameIndex] = result.frame
+			if !v.presentFrame(result.frame, result.epoch) {
 				return
 			}
 			frameIndex = 1 - frameIndex
@@ -217,14 +304,19 @@ func (v *viewer) run() {
 }
 
 // presentFrame waits for the UI to accept the frame before reusing buffers.
-func (v *viewer) presentFrame(frame *image.RGBA) bool {
+func (v *viewer) presentFrame(frame *image.RGBA, epoch uint64) bool {
+	v.syncPreviewVisibility()
 	ack := make(chan struct{})
+	accepted := false
 	v.win.Update(func() {
 		defer close(ack)
 		select {
 		case <-v.done:
 			return
 		default:
+		}
+		if !v.frameCurrent(epoch) {
+			return
 		}
 		if v.bitmap == nil {
 			v.bitmap = ui.NewBitmap(frame)
@@ -233,10 +325,11 @@ func (v *viewer) presentFrame(frame *image.RGBA) bool {
 		}
 		v.setFrameSize(frame.Bounds().Dx(), frame.Bounds().Dy())
 		v.message = ""
+		accepted = true
 	})
 	select {
 	case <-ack:
-		if v.preview != nil {
+		if accepted && v.frameCurrent(epoch) && v.preview != nil {
 			if err := v.preview.send(frame); err != nil {
 				v.preview.close()
 				v.preview = nil
@@ -264,6 +357,7 @@ func (v *viewer) reportPreview(err error) {
 // transport to take over. Hidden/minimized windows cancel the stream.
 func (v *viewer) runStream(source display.FrameStreamer) bool {
 	for {
+		v.syncPreviewVisibility()
 		select {
 		case <-v.done:
 			return true
@@ -275,10 +369,13 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 			case <-v.done:
 				timer.Stop()
 				return true
+			case <-v.visibilityCh:
+				timer.Stop()
 			case <-timer.C:
 			}
 			continue
 		}
+		epoch := v.visEpoch.Load()
 		ctx, cancel := context.WithCancel(context.Background())
 		v.streamMu.Lock()
 		select {
@@ -288,7 +385,7 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 			return true
 		default:
 		}
-		if v.hidden.Load() || v.minimized.Load() {
+		if !v.frameCurrent(epoch) {
 			v.streamMu.Unlock()
 			cancel()
 			continue
@@ -316,6 +413,8 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 				err = context.Canceled
 			case <-v.rateChanged:
 				ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
+			case <-v.visibilityCh:
+				v.syncPreviewVisibility()
 			case <-ticker.C:
 				ready = frames
 			case next, ok := <-ready:
@@ -333,7 +432,7 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 				} else if next.err != nil {
 					err = next.err
 				} else {
-					presented := v.presentFrame(next.frame)
+					presented := v.presentFrame(next.frame, epoch)
 					if !presented {
 						cancel()
 						err = context.Canceled

@@ -44,9 +44,59 @@ func TestMain(m *testing.M) {
 				os.Exit(3)
 			}
 			os.Exit(0)
+		case "visibility":
+			if _, err := frameprobe.ReadNext(os.Stdin, nil); !errors.Is(err, frameprobe.ErrInactive) {
+				os.Exit(2)
+			}
+			fmt.Println(`{"kind":"release"}`)
+			_, _ = frameprobe.ReadNext(os.Stdin, nil)
+			os.Exit(0)
 		}
 	}
 	os.Exit(m.Run())
+}
+
+func TestSlowCaptureDoesNotDelayPreviewClear(t *testing.T) {
+	t.Setenv("NEKO_TEST_PREVIEW_HELPER", "visibility")
+	t.Setenv("NEKO_EXPERIMENTAL_VULKAN_VIEWER", "")
+	t.Setenv("NEKO_EXPERIMENTAL_STREAM", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan previewinput.Event, 2)
+	p, err := startVulkanPreview(ctx, func(e previewinput.Event) { events <- e })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	s := &slowCaptureSession{capturing: make(chan struct{}), unblock: make(chan struct{}), input: make(chan struct{}), released: make(chan struct{}), closed: make(chan struct{})}
+	v := &viewer{source: s, preview: p, width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{}), visibilityCh: make(chan struct{}, 1)}
+	go v.run()
+	select {
+	case <-s.capturing:
+	case <-time.After(5 * time.Second):
+		v.stop()
+		close(s.unblock)
+		t.Fatal("capture did not start")
+	}
+	v.hidden.Store(true)
+	v.suspendPresentation()
+	select {
+	case event := <-events:
+		if event.Kind != "release" {
+			t.Fatalf("unexpected preview event: %+v", event)
+		}
+	case <-time.After(5 * time.Second):
+		v.stop()
+		close(s.unblock)
+		t.Fatal("preview clear waited for blocked capture")
+	}
+	v.stop()
+	close(s.unblock)
+	select {
+	case <-s.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("viewer did not release capture before closing source")
+	}
 }
 
 func TestVulkanPreviewInactiveThenResume(t *testing.T) {
@@ -73,6 +123,50 @@ func TestVulkanPreviewInactiveThenResume(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("helper did not exit")
+	}
+}
+
+func TestHiddenViewerInvalidatesInFlightFrameAndClearsPreview(t *testing.T) {
+	t.Setenv("NEKO_TEST_PREVIEW_HELPER", "inactive")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := startVulkanPreview(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	v := &viewer{preview: p, width: 4, height: 2, done: make(chan struct{}), events: make(chan pointerEvent, 8), visibilityCh: make(chan struct{}, 1)}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	<-v.events
+	oldEpoch := v.visEpoch.Load()
+	v.hidden.Store(true)
+	v.suspendPresentation()
+	if e := <-v.events; e.kind != releaseKeys {
+		t.Fatalf("hiding did not release input: %+v", e)
+	}
+	// A rapid show must not make the in-flight frame from before hiding valid.
+	v.hidden.Store(false)
+	v.notifyVisibility()
+	if v.frameCurrent(oldEpoch) || v.width != 0 || v.height != 0 {
+		t.Fatal("stale frame survived hide and show")
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	if len(v.events) != 0 {
+		t.Fatal("preview accepted input before a fresh frame")
+	}
+	v.syncPreviewVisibility()
+	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	frame.Pix[0] = 42
+	if err := p.send(frame); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-p.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("preview did not receive clear followed by frame")
 	}
 }
 
