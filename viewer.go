@@ -63,7 +63,10 @@ type viewer struct {
 	rateChanged   chan struct{}
 	visibilityCh  chan struct{}
 	visEpoch      atomic.Uint64
+	clearEpoch    atomic.Uint64
 	previewEpoch  uint64 // owned by the capture goroutine
+	previewShown  atomic.Bool
+	previewReady  bool // UI thread only; set after the preview presents a frame
 	hidden        atomic.Bool
 	minimized     atomic.Bool
 	bindings      map[uint16]mappedPoint
@@ -102,20 +105,60 @@ func openViewer(name string, source display.Session, bindingsPath string, onClos
 		}
 	})
 	v.win.OnBlur(v.releaseHostInput)
-	v.win.OnHide(func() { v.hidden.Store(true); v.suspendPresentation() })
-	v.win.OnShow(func() { v.hidden.Store(false); v.notifyVisibility() })
-	v.win.OnMinimize(func() { v.minimized.Store(true); v.suspendPresentation() })
-	v.win.OnRestore(func() { v.minimized.Store(false); v.notifyVisibility() })
+	v.win.OnHide(func() { v.setMainVisibility(&v.hidden, true) })
+	v.win.OnShow(func() { v.setMainVisibility(&v.hidden, false) })
+	v.win.OnMinimize(func() { v.setMainVisibility(&v.minimized, true) })
+	v.win.OnRestore(func() { v.setMainVisibility(&v.minimized, false) })
 	go v.run()
 	return v
 }
 
 func (v *viewer) stop() { v.once.Do(func() { close(v.done); v.cancelStream() }) }
 
+func (v *viewer) captureVisible() bool {
+	return (!v.hidden.Load() && !v.minimized.Load()) || v.previewShown.Load()
+}
+
+// The main window and the preview can independently keep capture active.
+// These transitions run on the UI thread.
+func (v *viewer) setMainVisibility(flag *atomic.Bool, hidden bool) {
+	wasVisible := v.captureVisible()
+	if flag.Swap(hidden) == hidden {
+		return
+	}
+	if hidden {
+		v.releaseHostInput()
+	}
+	if wasVisible && !v.captureVisible() {
+		v.suspendPresentation()
+	} else {
+		v.notifyVisibility()
+	}
+}
+
+func (v *viewer) setPreviewVisibility(shown bool) {
+	wasVisible := v.captureVisible()
+	if v.previewShown.Swap(shown) == shown {
+		return
+	}
+	v.previewReady = false
+	if !shown {
+		v.applyPreviewInput(previewinput.Event{Kind: "release"})
+		v.clearEpoch.Add(1)
+	}
+	if wasVisible && !v.captureVisible() {
+		v.suspendPresentation()
+	} else {
+		v.notifyVisibility()
+	}
+}
+
 // Called on the UI thread. Incrementing the epoch also invalidates a capture
 // that was already in flight when the window was hidden.
 func (v *viewer) suspendPresentation() {
 	v.visEpoch.Add(1)
+	v.clearEpoch.Add(1)
+	v.previewReady = false
 	v.setFrameSize(0, 0)
 	v.bitmap = nil
 	v.message = "画面采集已暂停"
@@ -132,12 +175,12 @@ func (v *viewer) notifyVisibility() {
 }
 
 func (v *viewer) frameCurrent(epoch uint64) bool {
-	return epoch == v.visEpoch.Load() && !v.hidden.Load() && !v.minimized.Load()
+	return epoch == v.visEpoch.Load() && v.captureVisible()
 }
 
 // Only the capture goroutine writes to the preview pipe.
 func (v *viewer) syncPreviewVisibility() {
-	epoch := v.visEpoch.Load()
+	epoch := v.clearEpoch.Load()
 	if epoch == v.previewEpoch {
 		return
 	}
@@ -277,7 +320,7 @@ func (v *viewer) runPolling() {
 			v.syncPreviewVisibility()
 		case <-ticker.C:
 			v.syncPreviewVisibility()
-			if capturing || v.hidden.Load() || v.minimized.Load() {
+			if capturing || !v.captureVisible() {
 				continue
 			}
 			select {
@@ -318,10 +361,14 @@ func (v *viewer) presentFrame(frame *image.RGBA, epoch uint64) bool {
 		if !v.frameCurrent(epoch) {
 			return
 		}
-		if v.bitmap == nil {
-			v.bitmap = ui.NewBitmap(frame)
+		if !v.hidden.Load() && !v.minimized.Load() {
+			if v.bitmap == nil {
+				v.bitmap = ui.NewBitmap(frame)
+			} else {
+				v.bitmap.Update(frame)
+			}
 		} else {
-			v.bitmap.Update(frame)
+			v.bitmap = nil
 		}
 		v.setFrameSize(frame.Bounds().Dx(), frame.Bounds().Dy())
 		v.message = ""
@@ -329,7 +376,7 @@ func (v *viewer) presentFrame(frame *image.RGBA, epoch uint64) bool {
 	})
 	select {
 	case <-ack:
-		if accepted && v.frameCurrent(epoch) && v.preview != nil {
+		if accepted && v.frameCurrent(epoch) && v.previewShown.Load() && v.preview != nil {
 			if err := v.preview.send(frame); err != nil {
 				v.preview.close()
 				v.preview = nil
@@ -354,7 +401,7 @@ func (v *viewer) reportPreview(err error) {
 }
 
 // runStream returns false on a stream failure, allowing the existing polling
-// transport to take over. Hidden/minimized windows cancel the stream.
+// transport to take over. Capture pauses when both windows are hidden.
 func (v *viewer) runStream(source display.FrameStreamer) bool {
 	for {
 		v.syncPreviewVisibility()
@@ -363,7 +410,7 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 			return true
 		default:
 		}
-		if v.hidden.Load() || v.minimized.Load() {
+		if !v.captureVisible() {
 			timer := time.NewTimer(200 * time.Millisecond)
 			select {
 			case <-v.done:
@@ -466,7 +513,7 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 			v.report(errors.New("画面流启动超时，已切换截图模式"))
 			return false
 		}
-		if interrupted || v.hidden.Load() || v.minimized.Load() {
+		if interrupted || !v.captureVisible() {
 			continue
 		}
 		if err != nil {
@@ -487,6 +534,7 @@ func (v *viewer) presentInactive() bool {
 		}
 		v.setFrameSize(0, 0)
 		v.bitmap = nil
+		v.previewReady = false
 		v.message = display.ErrDisplayInactive.Error()
 	})
 	select {
@@ -599,6 +647,16 @@ func (v *viewer) applyPreviewInput(event previewinput.Event) {
 	if !event.Valid() {
 		return
 	}
+	if event.Kind == "visible" || event.Kind == "hidden" {
+		v.setPreviewVisibility(event.Kind == "visible")
+		return
+	}
+	if event.Kind == "ready" {
+		if v.previewShown.Load() {
+			v.previewReady = true
+		}
+		return
+	}
 	release := func() {
 		if v.previewHeld {
 			v.previewHeld = false
@@ -618,6 +676,9 @@ func (v *viewer) applyPreviewInput(event previewinput.Event) {
 	}
 	if event.Kind == "up" {
 		release()
+		return
+	}
+	if !v.previewShown.Load() || !v.previewReady {
 		return
 	}
 	if event.Kind == "key_down" || event.Kind == "key_up" {

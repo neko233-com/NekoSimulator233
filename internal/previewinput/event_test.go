@@ -20,3 +20,14 @@ func TestPointMatchesFittedFrame(t *testing.T) {
 		t.Fatal("oversized window accepted")
 	}
 }
+
+func TestVisibilityEvents(t *testing.T) {
+	for _, kind := range []string{"visible", "hidden", "ready"} {
+		if !(Event{Kind: kind}).Valid() {
+			t.Fatalf("%s rejected", kind)
+		}
+	}
+	if (Event{Kind: "visibility"}).Valid() {
+		t.Fatal("unknown visibility accepted")
+	}
+}

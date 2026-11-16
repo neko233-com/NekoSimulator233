@@ -71,6 +71,7 @@ func startVulkanPreview(ctx context.Context, onEvent func(previewinput.Event)) (
 		defer func() {
 			if onEvent != nil {
 				onEvent(previewinput.Event{Kind: "release"})
+				onEvent(previewinput.Event{Kind: "hidden"})
 			}
 		}()
 		scanner := bufio.NewScanner(stdout)

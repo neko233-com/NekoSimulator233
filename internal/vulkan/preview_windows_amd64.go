@@ -71,6 +71,20 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 		}
 	}
 	var displayedWidth, displayedHeight, frameWidth, frameHeight int
+	var visibility previewVisibility
+	emitVisibility := func(next bool) {
+		if !visibility.change(next) {
+			return
+		}
+		frameWidth, frameHeight = 0, 0
+		if next {
+			emit(previewinput.Event{Kind: "visible"})
+		} else {
+			emit(previewinput.Event{Kind: "release"})
+			emit(previewinput.Event{Kind: "hidden"})
+		}
+	}
+	isVisible := user32.NewProc("IsWindowVisible")
 	setCapture := user32.NewProc("SetCapture")
 	releaseCapture := user32.NewProc("ReleaseCapture")
 	defWindowProc := user32.NewProc("DefWindowProcW")
@@ -81,6 +95,12 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 			return 0
 		case 0x0008: // WM_KILLFOCUS
 			emit(previewinput.Event{Kind: "release"})
+		case 0x0018: // WM_SHOWWINDOW
+			minimized, _, _ := isIconic.Call(hwnd)
+			emitVisibility(wp != 0 && minimized == 0)
+		case 0x0005: // WM_SIZE
+			shown, _, _ := isVisible.Call(hwnd)
+			emitVisibility(shown != 0 && wp != 1) // SIZE_MINIMIZED
 		case 0x0100, 0x0101, 0x0104, 0x0105: // WM_KEY* and WM_SYSKEY*
 			event, ok := previewinput.KeyMessage(msg, wp, lp)
 			if !ok {
@@ -169,6 +189,9 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 	}()
 	user32.NewProc("ShowWindow").Call(hwnd, 5)
 	user32.NewProc("UpdateWindow").Call(hwnd)
+	shown, _, _ := isVisible.Call(hwnd)
+	minimized, _, _ := isIconic.Call(hwnd)
+	emitVisibility(shown != 0 && minimized == 0)
 
 	frames := make(chan previewFrame)
 	returned := make(chan *image.RGBA)
@@ -217,6 +240,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 		select {
 		case next := <-frames:
 			if errors.Is(next.err, frameprobe.ErrInactive) {
+				visibility.clear()
 				frameWidth, frameHeight = 0, 0
 				blankPending = true
 				if err := clearDisplay(); err != nil {
@@ -230,7 +254,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				}
 				return next.err
 			}
-			if minimized, _, _ := isIconic.Call(hwnd); minimized == 0 {
+			if minimized, _, _ := isIconic.Call(hwnd); minimized == 0 && visibility.canPresent() {
 				if err := renderer.PresentFittedRGBA(next.frame, false); err != nil {
 					return err
 				}
@@ -241,6 +265,9 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				displayedWidth, displayedHeight = int(info.Width), int(info.Height)
 				frameWidth, frameHeight = next.frame.Bounds().Dx(), next.frame.Bounds().Dy()
 				blankPending = false
+				if visibility.presented() {
+					emit(previewinput.Event{Kind: "ready"})
+				}
 			}
 			select {
 			case returned <- next.frame:

@@ -35,6 +35,11 @@ func TestMain(m *testing.M) {
 			fmt.Println(`{"kind":"key_up","usage":26}`)
 			fmt.Println(`{"kind":"up"}`)
 			os.Exit(0)
+		case "window-state":
+			fmt.Println(`{"kind":"visible"}`)
+			fmt.Println(`{"kind":"hidden"}`)
+			fmt.Println(`{"kind":"visible"}`)
+			os.Exit(0)
 		case "inactive":
 			if _, err := frameprobe.ReadNext(os.Stdin, nil); !errors.Is(err, frameprobe.ErrInactive) {
 				os.Exit(2)
@@ -54,6 +59,28 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(m.Run())
+}
+
+func TestVulkanPreviewVisibilityPipeAndExit(t *testing.T) {
+	t.Setenv("NEKO_TEST_PREVIEW_HELPER", "window-state")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan previewinput.Event, 5)
+	p, err := startVulkanPreview(ctx, func(e previewinput.Event) { events <- e })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	for _, want := range []string{"visible", "hidden", "visible", "release", "hidden"} {
+		select {
+		case event := <-events:
+			if event.Kind != want {
+				t.Fatalf("got %q want %q", event.Kind, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("missing %s event", want)
+		}
+	}
 }
 
 func TestSlowCaptureDoesNotDelayPreviewClear(t *testing.T) {
@@ -136,6 +163,8 @@ func TestHiddenViewerInvalidatesInFlightFrameAndClearsPreview(t *testing.T) {
 	}
 	defer p.close()
 	v := &viewer{preview: p, width: 4, height: 2, done: make(chan struct{}), events: make(chan pointerEvent, 8), visibilityCh: make(chan struct{}, 1)}
+	v.previewShown.Store(true)
+	v.previewReady = true
 	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
 	<-v.events
 	oldEpoch := v.visEpoch.Load()
@@ -174,13 +203,13 @@ func TestVulkanPreviewInputPipeAndExitRelease(t *testing.T) {
 	t.Setenv("NEKO_TEST_PREVIEW_HELPER", "events")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	events := make(chan previewinput.Event, 5)
+	events := make(chan previewinput.Event, 6)
 	p, err := startVulkanPreview(ctx, func(e previewinput.Event) { events <- e })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.close()
-	for _, want := range []string{"down", "key_down", "key_up", "up", "release"} {
+	for _, want := range []string{"down", "key_down", "key_up", "up", "release", "hidden"} {
 		select {
 		case event := <-events:
 			if event.Kind != want {

@@ -17,7 +17,7 @@ func (e Event) Valid() bool {
 	if e.Kind == "key_down" || e.Kind == "key_up" {
 		return e.Usage >= 0x04 && e.Usage <= 0xa4 || e.Usage >= 0xe0 && e.Usage <= 0xe7
 	}
-	if e.Kind == "release" || e.Kind == "up" {
+	if e.Kind == "release" || e.Kind == "up" || e.Kind == "visible" || e.Kind == "hidden" || e.Kind == "ready" {
 		return true
 	}
 	if e.Kind != "down" && e.Kind != "move" {

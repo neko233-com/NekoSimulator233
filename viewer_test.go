@@ -16,6 +16,8 @@ import (
 
 func TestPreviewMouseMappingAndRelease(t *testing.T) {
 	v := &viewer{width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{})}
+	v.previewShown.Store(true)
+	v.previewReady = true
 	e := previewinput.Event{Kind: "down", Width: 4, Height: 4, FrameWidth: 4, FrameHeight: 2, X: 2, Y: 0}
 	v.applyPreviewInput(e)
 	if len(v.events) != 0 {
@@ -49,6 +51,8 @@ func TestPreviewMouseMappingAndRelease(t *testing.T) {
 
 func TestPreviewInactiveRejectsInputAndRecovers(t *testing.T) {
 	v := &viewer{width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{})}
+	v.previewShown.Store(true)
+	v.previewReady = true
 	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
 	<-v.events
 	v.setFrameSize(0, 0)
@@ -69,6 +73,8 @@ func TestPreviewInactiveRejectsInputAndRecovers(t *testing.T) {
 
 func TestPreviewKeysShareMappingsAndReleaseOnlyTheirOwner(t *testing.T) {
 	v := &viewer{width: 100, height: 200, events: make(chan pointerEvent, 16), done: make(chan struct{}), bindings: map[uint16]mappedPoint{0x04: {X: 0.5, Y: 0.5}}}
+	v.previewShown.Store(true)
+	v.previewReady = true
 	v.handleHostKey(0x06, true) // main window owns C
 	if e := <-v.events; e.kind != keyDown || e.usage != 0x06 {
 		t.Fatalf("main down: %+v", e)
@@ -102,6 +108,8 @@ func TestPreviewKeysShareMappingsAndReleaseOnlyTheirOwner(t *testing.T) {
 
 func TestPreviewJoystickAndResizeRelease(t *testing.T) {
 	v := &viewer{width: 100, height: 100, events: make(chan pointerEvent, 8), done: make(chan struct{}), joystick: &joystickConfig{Center: mappedPoint{X: 0.5, Y: 0.5}, Radius: 0.1}}
+	v.previewShown.Store(true)
+	v.previewReady = true
 	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x1a})
 	if e := <-v.events; e.kind != stickDown || e.usage != 0x1a {
 		t.Fatalf("stick down: %+v", e)
