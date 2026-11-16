@@ -4,7 +4,7 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。通过主窗口或 MCP 新建实例时使用 Android 34/35 的 `google_apis_playstore/x86_64` 镜像；若未安装，则尝试自动安装 Android 34 的官方 Play 镜像。选择 Android 11 时使用对应的 Android 30 Play 镜像，作为 32 位应用兼容路径。首次启动尚未创建的默认实例也会先准备 Play 镜像；准备过程支持进度和取消，Android 启动阶段单独限时三分钟。已创建实例不会自动切换镜像，旧的普通 Google APIs 镜像默认不包含 Play 商店。此路径尚未完成真实镜像下载、Google Play 登录、应用安装或 Vulkan 验证。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，画面窗口均不可见时暂停采集，失焦时释放按住的输入。
 
-新建实例自动准备镜像时，以及通过主窗口“安装 Google Play 镜像…”或 MCP 工具 `neko_install_play_image` 单独安装时，均支持进度与取消。默认 Android 34，主窗口选择 Android 11 时使用 API 30，MCP 参数 `api` 还可指定 35。需要 SDK Command-line Tools 和 JDK 17 或更高版本。程序不会自动接受 SDK 许可证；如尚未接受，请在 Android Studio 的 SDK Manager 中查看处理。安装不会改变已有实例，遇到已存在的不完整镜像目录会停止并提示检查。该安装入口尚未完成真实下载验证。
+新建实例自动准备镜像时，以及通过主窗口“安装 Google Play 镜像…”或 MCP 工具 `neko_install_play_image` 单独安装时，均支持进度与取消。默认 Android 34，主窗口选择 Android 11 时使用 API 30，MCP 参数 `api` 还可指定 35。需要 SDK Command-line Tools 和 JDK 17 或更高版本。程序不会自动接受 SDK 许可证；如尚未接受，请在 Android Studio 的 SDK Manager 中查看处理。安装不会改变已有实例，遇到已存在的不完整镜像目录会停止并提示检查。已在本机通过 SDK Manager 下载 Android 34 Play 镜像；本程序自动下载入口尚未完成真实下载验证。
 
 如果已配置的 SDK 只有 Command-line Tools，首次启动会尝试通过该 SDK 安装缺失的 `platform-tools` 和 `emulator`。已有运行组件直接使用；存在但不完整的组件目录不会自动覆盖。此流程需要可用 JDK 及已接受的相应 SDK 许可证，尚不包含从零下载 Command-line Tools 或 JDK，也尚未完成真实下载验收。
 
@@ -27,6 +27,10 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 “常用应用状态”检查当前 Android 用户的 Chrome、Play 商店、Play 服务、Google 服务框架、TapTap、微信和抖音是否已启用、停用或缺失；这不验证登录或功能。窗口可直接请求打开 Chrome、Google Play 和 TapTap。若 Chrome 缺失且 Play 商店已启用，会打开 Chrome 的官方 Play 页面，由用户在模拟器内完成安装；普通 Google APIs 镜像不保证自带 Chrome 或 Play 商店。Agent 可使用 `neko_core_apps` 和 `neko_open_core_app` 执行相同操作。
 
 新建独立实例首次启动后，会在后台尝试从 TapTap 官方下载入口安装 Android 客户端；画面可以继续使用。缺少 `aapt` 时会尝试用 SDK Manager 安装 Build Tools 35.0.0，需要 Command-line Tools、JDK 和相应 SDK 许可证；如果该版本目录已存在但不完整则不会覆盖。实例停止、网络失败或依赖准备失败时保留待重试状态，下次启动重试，也可使用“安装 TapTap…”或 Agent 工具 `neko_install_taptap` 手动重试。同一实例的自动和手动安装互斥；下载期间可关闭实例，向 Android 安装时关闭操作会等待安装结束，等待超时后可重试。既有实例和从备份恢复的实例不会自动安装。程序限制下载来源和大小，使用 `aapt` 检查包名，不覆盖已安装应用；下载计算的 SHA-256 用于标识本次文件，并非发布者签名认证。点击“刷新实例”或调用 `neko_taptap_setup_status` 可查看首次准备状态，该状态不是当前安装状态。依赖下载和自动安装流程尚未完成真实应用验收。
+
+本机 Android 34 Play x86_64 镜像 revision 14 的静态文件检查发现 Chrome、Play 商店和 Google 服务组件；镜像声明支持 `arm64-v8a`，并包含 `libndk_translation.so`。一次真实官方下载检查发现 TapTap APK 带有 `arm64-v8a` 和 `armeabi-v7a` 原生库。上述检查不证明 Chrome 已完成首次安装，也不证明 TapTap 能在该镜像中安装或运行。
+
+可在 Windows PowerShell 7 中设置 `$env:NEKO_TEST_TAPTAP_DOWNLOAD='1'` 后运行 `go test -p 1 ./internal/avd -run TestLiveTapTapDownloadAndPackageIdentity -count=1 -v`，从官方入口实际下载并用 SDK `aapt` 检查 TapTap 包名和原生架构。该测试不启动模拟器，也不验证签名来源、Android 内安装、ARM 转译或应用运行。
 
 主窗口可新建和选择多个独立实例。名称使用英文、数字、点、下划线或连字符；新建时不会覆盖已有实例或不完整目录。启动、关闭、资源设置与 APK 安装作用于当前选中的实例；多个实例各有独立的 Android 数据和资源设置。运行状态是上次检查时的进程状态，可以通过“刷新实例”重新检查。多开会增加宿主资源占用。
 
