@@ -76,6 +76,7 @@ type Swapchain struct {
 	pending                          *presentResources
 	reusable                         *presentResources
 	poisoned                         bool
+	fit                              *fitPlan
 }
 
 type SwapchainInfo struct {
@@ -386,6 +387,7 @@ func (s *Swapchain) closeLocked() error {
 		s.surface = 0
 	}
 	s.images = nil
+	s.fit = nil
 	delete(s.host.swapchains, s)
 	return nil
 }

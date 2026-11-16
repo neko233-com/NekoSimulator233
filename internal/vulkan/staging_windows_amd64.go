@@ -353,7 +353,10 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 	var size int
 	pack := func(data []byte, compare bool) error {
 		if fit {
-			return fittedFrame(data, frame, s.extent, s.format.Format, compare)
+			if compare {
+				return fittedFrame(data, frame, s.extent, s.format.Format, true)
+			}
+			return s.fit.pack(data, frame, s.format.Format)
 		}
 		return frameBytes(data, frame, s.format.Format, compare)
 	}
@@ -377,6 +380,11 @@ func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 			}
 			if verify && s.usage&vkUsageTransferSrc == 0 {
 				return errors.New("Vulkan 表面不支持图像回读")
+			}
+			if fit {
+				if err := s.ensureFitPlan(frame); err != nil {
+					return err
+				}
 			}
 			return nil
 		},

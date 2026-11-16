@@ -29,6 +29,97 @@ func TestStagingWin64ABI(t *testing.T) {
 	}
 }
 
+func BenchmarkFittedFrame(b *testing.B) {
+	for _, tc := range []struct {
+		name         string
+		sw, sh, w, h int
+	}{{"portrait", 720, 1280, 900, 700}, {"landscape", 1280, 720, 900, 700}} {
+		b.Run(tc.name+"/baseline", func(b *testing.B) {
+			frame := image.NewRGBA(image.Rect(0, 0, tc.sw, tc.sh))
+			dst := make([]byte, tc.w*tc.h*4)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fittedFrame(dst, frame, extent2D{uint32(tc.w), uint32(tc.h)}, vkFormatBGRA8, false); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(tc.name+"/cached", func(b *testing.B) {
+			frame := image.NewRGBA(image.Rect(0, 0, tc.sw, tc.sh))
+			dst := make([]byte, tc.w*tc.h*4)
+			plan, err := newFitPlan(tc.sw, tc.sh, extent2D{uint32(tc.w), uint32(tc.h)})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := plan.pack(dst, frame, vkFormatBGRA8); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestFitPlanMatchesReferenceAndReusesGeometry(t *testing.T) {
+	for _, c := range [][4]int{{1, 1, 1, 1}, {2, 1, 2, 3}, {3, 7, 8, 5}, {7, 3, 2, 9}, {8, 4, 16, 8}, {13, 17, 19, 11}} {
+		sw, sh, w, h := c[0], c[1], c[2], c[3]
+		parent := image.NewRGBA(image.Rect(0, 0, sw+2, sh+2))
+		frame := parent.SubImage(image.Rect(1, 1, sw+1, sh+1)).(*image.RGBA)
+		for i := range frame.Pix {
+			frame.Pix[i] = byte(i*73 + 19)
+		}
+		extent := extent2D{uint32(w), uint32(h)}
+		plan, err := newFitPlan(sw, sh, extent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, format := range []uint32{vkFormatRGBA8, vkFormatBGRA8, vkFormatRGBA8SRGB, vkFormatBGRA8SRGB} {
+			for pass := 0; pass < 2; pass++ {
+				frame.Pix[0]++
+				got, want := make([]byte, w*h*4), make([]byte, w*h*4)
+				if err := fittedFrame(want, frame, extent, format, false); err != nil {
+					t.Fatal(err)
+				}
+				if err := plan.pack(got, frame, format); err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Fatalf("format %d geometry %v pass %d differs", format, c, pass)
+				}
+			}
+		}
+		if err := plan.pack(make([]byte, w*h*4-1), frame, vkFormatRGBA8); err == nil {
+			t.Fatal("accepted short output")
+		}
+		if err := plan.pack(make([]byte, w*h*4), frame, 999); err == nil {
+			t.Fatal("accepted unsupported format")
+		}
+	}
+}
+
+func TestSwapchainFitPlanCache(t *testing.T) {
+	h := &Host{swapchains: make(map[*Swapchain]struct{})}
+	s := &Swapchain{host: h, extent: extent2D{6, 6}}
+	frame := image.NewRGBA(image.Rect(0, 0, 4, 2))
+	if err := s.ensureFitPlan(frame); err != nil {
+		t.Fatal(err)
+	}
+	first := s.fit
+	if err := s.ensureFitPlan(frame); err != nil || s.fit != first {
+		t.Fatal("same geometry was not reused")
+	}
+	frame = image.NewRGBA(image.Rect(0, 0, 2, 4))
+	if err := s.ensureFitPlan(frame); err != nil || s.fit == first {
+		t.Fatal("changed geometry reused old plan")
+	}
+	if err := s.Close(); err != nil || s.fit != nil {
+		t.Fatal("close retained plan")
+	}
+}
+
 func TestFittedFrameMatchesPreviewInputCoordinates(t *testing.T) {
 	for _, dims := range [][4]int{{4, 2, 5, 5}, {2, 4, 7, 3}, {3, 3, 2, 2}, {1, 5, 8, 7}} {
 		sw, sh, w, h := dims[0], dims[1], dims[2], dims[3]
