@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,6 +80,54 @@ func TestFirstRunTapTapLockAndLegacyInstance(t *testing.T) {
 	}
 	if err := legacy.runPendingTapTap(context.Background(), Instance{}, func(context.Context, Instance) error { t.Fatal("legacy instance changed"); return nil }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManualAndAutomaticTapTapInstallsShareLock(t *testing.T) {
+	m := backupFixture(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- m.withTapTapInstallLock(context.Background(), func(context.Context) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual setup did not start")
+	}
+	called := false
+	err := m.runPendingTapTap(context.Background(), Instance{}, func(context.Context, Instance) error { called = true; return nil })
+	if err != nil || called {
+		close(release)
+		t.Fatalf("automatic install overlapped manual install: %v", err)
+	}
+	err = m.withTapTapInstallLock(context.Background(), func(context.Context) error { called = true; return nil })
+	if err == nil || !strings.Contains(err.Error(), "正在安装") || called {
+		close(release)
+		t.Fatalf("concurrent manual install not rejected: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual setup did not release lock")
+	}
+	if err := m.runPendingTapTap(context.Background(), Instance{}, func(context.Context, Instance) error {
+		return m.withTapTapInstallLock(context.Background(), func(context.Context) error { called = true; return nil })
+	}); err == nil || !strings.Contains(err.Error(), "正在安装") || called {
+		t.Fatalf("manual install overlapped automatic install: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := m.withTapTapInstallLock(canceled, func(context.Context) error { t.Fatal("canceled setup ran"); return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation not honored: %v", err)
 	}
 }
 

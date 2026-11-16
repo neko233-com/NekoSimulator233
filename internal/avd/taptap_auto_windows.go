@@ -91,6 +91,29 @@ func (m Manager) tryTapTapAutoLock(dir string) (func(), error) {
 	return func() { _ = windows.UnlockFileEx(h, 0, 1, 0, &overlap); _ = windows.CloseHandle(h) }, nil
 }
 
+// Manual installs use the same per-instance lock as first-run provisioning.
+func (m Manager) withTapTapInstallLock(ctx context.Context, run func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dir, err := ownedAVD(m)
+	if err != nil {
+		return err
+	}
+	unlock, err := m.tryTapTapAutoLock(dir)
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+		return errors.New("TapTap 正在安装，请稍后重试")
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return run(ctx)
+}
+
 func (m Manager) markTapTapAutoDone() error {
 	status, err := m.TapTapAutoStatus()
 	if err != nil || status == "not_scheduled" || status == "complete" {
@@ -153,7 +176,7 @@ func (m Manager) scheduleTapTap(instance Instance) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = m.runPendingTapTap(ctx, instance, func(ctx context.Context, i Instance) error {
-			_, err := m.InstallTapTap(ctx, i)
+			_, err := m.installTapTapLocked(ctx, i)
 			return err
 		})
 	}()

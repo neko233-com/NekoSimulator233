@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/neko233-com/NekoSimulator233/internal/provision"
 )
@@ -33,6 +34,19 @@ type tapTapSetupOps struct {
 // InstallTapTap downloads the official APK into a temporary file, validates
 // the package name and installs it without replacing an existing application.
 func (m Manager) InstallTapTap(ctx context.Context, instance Instance) (TapTapInstallResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	var result TapTapInstallResult
+	err := m.withTapTapInstallLock(ctx, func(ctx context.Context) error {
+		var err error
+		result, err = m.installTapTapLocked(ctx, instance)
+		return err
+	})
+	return result, err
+}
+
+// The caller holds the instance's TapTap installation lock.
+func (m Manager) installTapTapLocked(ctx context.Context, instance Instance) (TapTapInstallResult, error) {
 	result, err := installTapTap(ctx, tapTapSetupOps{
 		installed: func(ctx context.Context) (bool, error) {
 			var installed bool
@@ -46,7 +60,7 @@ func (m Manager) InstallTapTap(ctx context.Context, instance Instance) (TapTapIn
 		download: provision.DownloadTapTap,
 		verify:   m.verifyTapTapAPK,
 		install: func(ctx context.Context, path string) error {
-			return m.withCurrentInstance(ctx, instance, func(ctx context.Context, current Instance) error {
+			return m.withCurrentInstanceGuard(ctx, instance, func(ctx context.Context, current Instance) error {
 				installed, err := m.hasTapTap(ctx, current)
 				if err != nil || installed {
 					return err
