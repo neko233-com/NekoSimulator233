@@ -3,7 +3,41 @@ package main
 import (
 	"context"
 	"time"
+
+	"github.com/neko233-com/NekoSimulator233/internal/avd"
 )
+
+func (a *app) installTapTap() {
+	if a.busy {
+		return
+	}
+	name := a.selectedName()
+	a.busy = true
+	a.message = "正在从官网下载并安装 TapTap…"
+	go func() {
+		manager, err := selectedManager(name)
+		var result avd.TapTapInstallResult
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			instance, readyErr := manager.Ready(ctx)
+			err = readyErr
+			if err == nil {
+				result, err = manager.InstallTapTap(ctx, instance)
+			}
+			cancel()
+		}
+		a.window.Update(func() {
+			a.busy = false
+			if err != nil {
+				a.message = "TapTap 安装未完成：" + err.Error()
+			} else if result.AlreadyInstalled {
+				a.message = name + " 原先已安装 TapTap"
+			} else {
+				a.message = name + " 已安装 TapTap"
+			}
+		})
+	}()
+}
 
 func (a *app) openOptionalDownload(id, label string) {
 	if a.busy {

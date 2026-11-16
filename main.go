@@ -372,6 +372,9 @@ func (a *app) view(c *ui.Context) {
 		})
 		ui.Text(c, "备份未加密，包含应用数据；恢复请先填写新的实例名称。").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("install-taptap"), "安装 TapTap…").Disabled(a.busy).Clicked() {
+				a.installTapTap()
+			}
 			if ui.Button(c.Key("download-wechat"), "微信官方下载…").Disabled(a.busy).Clicked() {
 				a.openOptionalDownload("wechat", "微信")
 			}
