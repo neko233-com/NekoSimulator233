@@ -47,7 +47,7 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_host_vulkan`、`neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。除 `neko_host_vulkan` 查询 Windows 宿主以外，这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
-`neko_test_vulkan_guest_frame` 对已运行的所选独立实例截图，通过内存管道交给隔离子进程，在隐藏 Vulkan 窗口上传并回读比对；仅返回设备和验证结果，不返回或保存截图。它不会启动实例。该诊断会分配画面和 GPU 资源，尚未完成真实实例端到端验证，不代表可见窗口已经接入 Vulkan 或证明游戏性能。
+`neko_test_vulkan_guest_frame` 对已运行的所选独立实例截图，通过内存管道交给隔离子进程，在隐藏 Vulkan 窗口上传并回读比对；仅返回设备和验证结果，不返回或保存截图。可同时传入目标 `width` 和 `height`，测试保持比例、黑边填充的 CPU 最近邻缩放；未指定时使用原始尺寸。它不会启动实例。该诊断会分配画面和 GPU 资源，尚未完成真实实例端到端验证，不代表可见窗口已经接入 Vulkan 或证明游戏性能。
 
 `neko_host_vulkan` 会短暂创建并销毁宿主 Vulkan 图形设备，报告设备、图形队列及驱动声明的交换链和 Win32 外部资源扩展；传入 `{"test_surface":true}` 时还会创建并销毁 64×64 隐藏测试窗口和交换链。传入 `{"test_present":true}` 时会在独立子进程向隐藏交换链提交纯色画面；传入 `{"test_pixels":true}` 还会上传图案并从 GPU 图像回读比对。呈现测试需要驱动支持交换链维护扩展，像素测试还需要交换链支持回读。查询不启动 Android 实例，也不证明屏幕上实际显示了像素或外部资源互操作可用。实验像素路径复用成功帧的资源，但每帧仍同步等待，尚未完成真实多帧和游戏性能验证。源码目录中可用 `go run ./cmd/vulkan-host-probe -pixels` 独立执行像素测试。
 

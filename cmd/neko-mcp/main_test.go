@@ -11,6 +11,20 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func TestParseFrameProbeMode(t *testing.T) {
+	if _, _, fit, err := parseFrameProbeMode("--vulkan-guest-frame-probe"); fit || err != nil {
+		t.Fatalf("original size: %v", err)
+	}
+	if w, h, fit, err := parseFrameProbeMode("--vulkan-guest-frame-probe=4x3"); !fit || w != 4 || h != 3 || err != nil {
+		t.Fatalf("scaled size: %d %d %v", w, h, err)
+	}
+	for _, mode := range []string{"--vulkan-guest-frame-probe=0x1", "--vulkan-guest-frame-probe=8193x1", "--vulkan-guest-frame-probe=1x2extra", "--vulkan-guest-frame-probe=1x", "--vulkan-guest-frame-probe=1x-1"} {
+		if _, _, _, err := parseFrameProbeMode(mode); err == nil {
+			t.Fatalf("accepted %q", mode)
+		}
+	}
+}
+
 func TestStdioExecutable(t *testing.T) {
 	exe := os.Getenv("NEKO_TEST_MCP_EXE")
 	if exe == "" {

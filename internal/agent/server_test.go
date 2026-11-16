@@ -27,12 +27,15 @@ func TestGuestFrameToolKeepsPixelsPrivate(t *testing.T) {
 	called := false
 	s := &Service{
 		captureProbeFrame: func(context.Context) (*image.RGBA, error) { return frame, nil },
-		guestFrameProbe: func(_ context.Context, got *image.RGBA) (vulkan.DeviceInfo, error) {
+		guestFrameProbe: func(_ context.Context, got *image.RGBA, width, height int) (vulkan.DeviceInfo, error) {
 			called = true
 			if got != frame || got.Pix[0] != 123 {
 				t.Fatal("frame not passed to probe")
 			}
-			return vulkan.DeviceInfo{Name: "fake", TestSurface: &vulkan.SwapchainInfo{Width: 2, Height: 2, ImageCount: 3, PixelsVerified: true}}, nil
+			if width == 0 && height == 0 {
+				width, height = 2, 2
+			}
+			return vulkan.DeviceInfo{Name: "fake", TestSurface: &vulkan.SwapchainInfo{Width: uint32(width), Height: uint32(height), ImageCount: 3, PixelsVerified: true}}, nil
 		},
 	}
 	ctx := context.Background()
@@ -56,13 +59,27 @@ func TestGuestFrameToolKeepsPixelsPrivate(t *testing.T) {
 		t.Fatalf("pixels in response: %s %v", data, err)
 	}
 	called = false
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_test_vulkan_guest_frame", Arguments: map[string]any{"width": 4, "height": 3}})
+	if err != nil || result == nil {
+		t.Fatalf("scaled frame tool: %v", err)
+	}
+	data, _ = json.Marshal(result.StructuredContent)
+	if err != nil || result.IsError || !called || !strings.Contains(string(data), `"width":4`) || !strings.Contains(string(data), `"height":3`) {
+		t.Fatalf("scaled frame tool: %s %v", data, err)
+	}
+	called = false
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_test_vulkan_guest_frame", Arguments: map[string]any{"width": 4}})
+	if err != nil || !result.IsError || called {
+		t.Fatal("invalid dimensions were not rejected before capture")
+	}
+	called = false
 	s.captureProbeFrame = func(context.Context) (*image.RGBA, error) { return nil, errors.New("capture failed") }
-	if _, _, err := s.testVulkanGuestFrame(ctx, nil, Empty{}); err == nil || called {
+	if _, _, err := s.testVulkanGuestFrame(ctx, nil, GuestFrameRequest{}); err == nil || called {
 		t.Fatal("capture failure was not propagated")
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, _, err := s.testVulkanGuestFrame(canceled, nil, Empty{}); !errors.Is(err, context.Canceled) {
+	if _, _, err := s.testVulkanGuestFrame(canceled, nil, GuestFrameRequest{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled call: %v", err)
 	}
 }

@@ -24,7 +24,7 @@ type Service struct {
 	controlReadiness  avd.ControlReadiness
 	hostProbe         func(bool) (vulkan.DeviceInfo, error)
 	presentProbe      func(context.Context, bool) (vulkan.DeviceInfo, error)
-	guestFrameProbe   func(context.Context, *image.RGBA) (vulkan.DeviceInfo, error)
+	guestFrameProbe   func(context.Context, *image.RGBA, int, int) (vulkan.DeviceInfo, error)
 	captureProbeFrame func(context.Context) (*image.RGBA, error)
 }
 
@@ -36,6 +36,10 @@ type HostVulkanRequest struct {
 	TestSurface bool `json:"test_surface,omitempty" jsonschema:"Create and destroy a small hidden test window and Vulkan swapchain"`
 	TestPresent bool `json:"test_present,omitempty" jsonschema:"In an isolated subprocess, submit a solid-color frame to a hidden test swapchain and wait for GPU and presentation fences"`
 	TestPixels  bool `json:"test_pixels,omitempty" jsonschema:"In an isolated subprocess upload and verify a patterned frame using GPU readback; also performs test_present"`
+}
+type GuestFrameRequest struct {
+	Width  int `json:"width,omitempty" jsonschema:"Optional target width in pixels; specify height as well"`
+	Height int `json:"height,omitempty" jsonschema:"Optional target height in pixels; specify width as well"`
 }
 type State struct {
 	Ready           bool   `json:"ready"`
@@ -167,7 +171,10 @@ func newServer(s *Service) *mcp.Server {
 	return server
 }
 
-func (s *Service) testVulkanGuestFrame(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
+func (s *Service) testVulkanGuestFrame(ctx context.Context, _ *mcp.CallToolRequest, request GuestFrameRequest) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {
+	if (request.Width != 0 || request.Height != 0) && (request.Width <= 0 || request.Height <= 0 || request.Width > 8192 || request.Height > 8192 || int64(request.Width)*int64(request.Height) > 32*1024*1024) {
+		return nil, vulkan.DeviceInfo{}, errors.New("目标画面尺寸无效")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -199,7 +206,7 @@ func (s *Service) testVulkanGuestFrame(ctx context.Context, _ *mcp.CallToolReque
 	if probe == nil {
 		probe = runGuestFrameProbe
 	}
-	info, err := probe(ctx, frame)
+	info, err := probe(ctx, frame, request.Width, request.Height)
 	return nil, info, err
 }
 

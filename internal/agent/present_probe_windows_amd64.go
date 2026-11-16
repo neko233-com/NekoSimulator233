@@ -41,16 +41,25 @@ func runPresentProbe(ctx context.Context, pixels bool) (vulkan.DeviceInfo, error
 	return runVulkanProbe(ctx, mode, nil, pixels, true)
 }
 
-func runGuestFrameProbe(ctx context.Context, frame *image.RGBA) (vulkan.DeviceInfo, error) {
+func runGuestFrameProbe(ctx context.Context, frame *image.RGBA, width, height int) (vulkan.DeviceInfo, error) {
 	input, err := frameprobe.Reader(frame)
 	if err != nil {
 		return vulkan.DeviceInfo{}, err
 	}
-	info, err := runVulkanProbe(ctx, "--vulkan-guest-frame-probe", input, true, false)
+	mode := "--vulkan-guest-frame-probe"
+	if width != 0 || height != 0 {
+		if width <= 0 || height <= 0 || width > 8192 || height > 8192 || int64(width)*int64(height) > 32*1024*1024 {
+			return vulkan.DeviceInfo{}, errors.New("目标画面尺寸无效")
+		}
+		mode = fmt.Sprintf("--vulkan-guest-frame-probe=%dx%d", width, height)
+	} else {
+		width, height = frame.Rect.Dx(), frame.Rect.Dy()
+	}
+	info, err := runVulkanProbe(ctx, mode, input, true, false)
 	if err != nil {
 		return vulkan.DeviceInfo{}, err
 	}
-	if int(info.TestSurface.Width) != frame.Rect.Dx() || int(info.TestSurface.Height) != frame.Rect.Dy() || info.TestSurface.ImageCount == 0 {
+	if int(info.TestSurface.Width) != width || int(info.TestSurface.Height) != height || info.TestSurface.ImageCount == 0 {
 		return vulkan.DeviceInfo{}, errors.New("Vulkan 画面验证尺寸无效")
 	}
 	return info, nil

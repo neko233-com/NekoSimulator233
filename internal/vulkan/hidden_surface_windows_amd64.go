@@ -26,10 +26,10 @@ func inspectHiddenSurface(h *Host, present, pixels bool) (SwapchainInfo, error) 
 			}
 		}
 	}
-	return inspectHiddenFrame(h, 64, 64, present, frame)
+	return inspectHiddenFrame(h, 64, 64, present, frame, false)
 }
 
-func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.RGBA) (SwapchainInfo, error) {
+func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.RGBA, fit bool) (SwapchainInfo, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	createWindow := user32.NewProc("CreateWindowExW")
@@ -70,7 +70,13 @@ func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.R
 			_ = s.Close()
 			return SwapchainInfo{}, fmt.Errorf("测试窗口尺寸异常：%dx%d", info.Width, info.Height)
 		}
-		if err := s.PresentRGBA(frame, true); err != nil {
+		var err error
+		if fit {
+			err = s.PresentFittedRGBA(frame, true)
+		} else {
+			err = s.PresentRGBA(frame, true)
+		}
+		if err != nil {
 			if closeErr := s.Close(); closeErr != nil {
 				destroy = false
 				return SwapchainInfo{}, fmt.Errorf("%v；%w", err, closeErr)

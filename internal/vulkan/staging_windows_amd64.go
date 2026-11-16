@@ -232,7 +232,14 @@ func frameSize(frame *image.RGBA, extent extent2D) (int, error) {
 	if frame == nil || frame.Rect.Dx() <= 0 || frame.Rect.Dy() <= 0 || uint64(frame.Rect.Dx()) != uint64(extent.Width) || uint64(frame.Rect.Dy()) != uint64(extent.Height) {
 		return 0, errors.New("画面尺寸必须与 Vulkan 交换链一致")
 	}
-	width, height := uint64(extent.Width), uint64(extent.Height)
+	return validateFrame(frame)
+}
+
+func validateFrame(frame *image.RGBA) (int, error) {
+	if frame == nil || frame.Rect.Dx() <= 0 || frame.Rect.Dy() <= 0 {
+		return 0, errors.New("画面尺寸无效")
+	}
+	width, height := uint64(frame.Rect.Dx()), uint64(frame.Rect.Dy())
 	maxInt := uint64(^uint(0) >> 1)
 	if width > maxInt/4 || height > maxInt/(width*4) {
 		return 0, errors.New("画面大小超出系统范围")
@@ -242,6 +249,60 @@ func frameSize(frame *image.RGBA, extent extent2D) (int, error) {
 		return 0, errors.New("画面像素缓冲区无效")
 	}
 	return int(row * height), nil
+}
+
+// fittedFrame packs an aspect-preserving, nearest-neighbor image directly into
+// the mapped staging buffer, including opaque black bars. No extra full-size
+// CPU image is allocated. GPU scaling is a future optimization.
+func fittedFrame(dst []byte, frame *image.RGBA, extent extent2D, format uint32, compare bool) error {
+	if _, err := validateFrame(frame); err != nil {
+		return err
+	}
+	w, h := uint64(extent.Width), uint64(extent.Height)
+	if w == 0 || h == 0 || w > 8192 || h > 8192 || w*h > 32*1024*1024 || uint64(len(dst)) != w*h*4 {
+		return errors.New("目标画面尺寸无效")
+	}
+	bgra := format == vkFormatBGRA8 || format == vkFormatBGRA8SRGB
+	if !bgra && format != vkFormatRGBA8 && format != vkFormatRGBA8SRGB {
+		return errors.New("不支持的 Vulkan 像素格式")
+	}
+	sw, sh := uint64(frame.Rect.Dx()), uint64(frame.Rect.Dy())
+	// Input is bounded here to keep all intermediate products well within uint64.
+	if sw > 8192 || sh > 8192 || sw*sh > 32*1024*1024 {
+		return errors.New("源画面尺寸无效")
+	}
+	if w == sw && h == sh {
+		return frameBytes(dst, frame, format, compare)
+	}
+	fw, fh := w, h
+	if w*sh <= h*sw {
+		fh = max(uint64(1), w*sh/sw)
+	} else {
+		fw = max(uint64(1), h*sw/sh)
+	}
+	left, top := (w-fw)/2, (h-fh)/2
+	for y := uint64(0); y < h; y++ {
+		for x := uint64(0); x < w; x++ {
+			var r, g, b, a byte = 0, 0, 0, 255
+			if x >= left && x < left+fw && y >= top && y < top+fh {
+				sx, sy := (x-left)*sw/fw, (y-top)*sh/fh
+				i := int(sy)*frame.Stride + int(sx)*4
+				r, g, b, a = frame.Pix[i], frame.Pix[i+1], frame.Pix[i+2], frame.Pix[i+3]
+				if bgra {
+					r, b = b, r
+				}
+			}
+			i := int((y*w + x) * 4)
+			if compare {
+				if dst[i] != r || dst[i+1] != g || dst[i+2] != b || dst[i+3] != a {
+					return fmt.Errorf("GPU 画面回读不一致：(%d,%d)", x, y)
+				}
+			} else {
+				dst[i], dst[i+1], dst[i+2], dst[i+3] = r, g, b, a
+			}
+		}
+	}
+	return nil
 }
 
 func frameBytes(dst []byte, frame *image.RGBA, format uint32, compare bool) error {
@@ -279,11 +340,38 @@ func frameBytes(dst []byte, frame *image.RGBA, format uint32, compare bool) erro
 // The caller must not mutate frame until the call returns. verify performs a
 // GPU image-to-buffer round trip and is intended for diagnostics only.
 func (s *Swapchain) PresentRGBA(frame *image.RGBA, verify bool) error {
+	return s.presentRGBA(frame, verify, false)
+}
+
+// PresentFittedRGBA preserves aspect ratio and fills the rest with black.
+// CPU scaling is synchronous and is not a zero-copy or low-latency path.
+func (s *Swapchain) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
+	return s.presentRGBA(frame, verify, true)
+}
+
+func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
 	var size int
+	pack := func(data []byte, compare bool) error {
+		if fit {
+			return fittedFrame(data, frame, s.extent, s.format.Format, compare)
+		}
+		return frameBytes(data, frame, s.format.Format, compare)
+	}
 	hooks := frameHooks{
 		validate: func(_ *Host) error {
 			var err error
-			size, err = frameSize(frame, s.extent)
+			if fit {
+				_, err = validateFrame(frame)
+				w, h := uint64(s.extent.Width), uint64(s.extent.Height)
+				if err == nil && (w == 0 || h == 0 || w > 8192 || h > 8192 || w*h > 32*1024*1024 || frame.Rect.Dx() > 8192 || frame.Rect.Dy() > 8192 || uint64(frame.Rect.Dx())*uint64(frame.Rect.Dy()) > 32*1024*1024) {
+					err = errors.New("画面尺寸无效")
+				}
+				if err == nil {
+					size = int(w * h * 4)
+				}
+			} else {
+				size, err = frameSize(frame, s.extent)
+			}
 			if err != nil {
 				return err
 			}
@@ -296,7 +384,7 @@ func (s *Swapchain) PresentRGBA(frame *image.RGBA, verify bool) error {
 			if err := op.ensureStaging(h, size, verify, (*stagingBuffer).create); err != nil {
 				return err
 			}
-			return op.staging.withMapped(h, func(data []byte) error { return frameBytes(data, frame, s.format.Format, false) })
+			return op.staging.withMapped(h, func(data []byte) error { return pack(data, false) })
 		},
 		record: func(h *Host, op *presentResources, cmd uintptr, img uint64, rng *imageSubresourceRange) (uint32, uint32, error) {
 			b := op.staging
@@ -327,7 +415,7 @@ func (s *Swapchain) PresentRGBA(frame *image.RGBA, verify bool) error {
 	}
 	if verify {
 		hooks.verify = func(h *Host, op *presentResources) error {
-			return op.staging.withMapped(h, func(data []byte) error { return frameBytes(data, frame, s.format.Format, true) })
+			return op.staging.withMapped(h, func(data []byte) error { return pack(data, true) })
 		}
 	}
 	return s.presentFrame(hooks)

@@ -56,6 +56,44 @@ func TestFramePackingAndValidation(t *testing.T) {
 	}
 }
 
+func TestFittedFramePacking(t *testing.T) {
+	frame := &image.RGBA{Rect: image.Rect(3, 5, 5, 6), Stride: 12, Pix: []byte{1, 2, 3, 255, 4, 5, 6, 255, 99, 99, 99, 99}}
+	buf := make([]byte, 2*3*4)
+	if err := fittedFrame(buf, frame, extent2D{2, 3}, vkFormatBGRA8, false); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0, 0, 0, 255, 0, 0, 0, 255, 3, 2, 1, 255, 6, 5, 4, 255, 0, 0, 0, 255, 0, 0, 0, 255}
+	if !bytes.Equal(buf, want) {
+		t.Fatalf("letterboxed BGRA: %v", buf)
+	}
+	if err := fittedFrame(buf, frame, extent2D{2, 3}, vkFormatBGRA8, true); err != nil {
+		t.Fatal(err)
+	}
+	buf[0]++
+	if err := fittedFrame(buf, frame, extent2D{2, 3}, vkFormatBGRA8, true); err == nil {
+		t.Fatal("incorrect bar accepted")
+	}
+	up := make([]byte, 4*2*4)
+	if err := fittedFrame(up, frame, extent2D{4, 2}, vkFormatRGBA8, false); err != nil {
+		t.Fatal(err)
+	}
+	wantRow := []byte{1, 2, 3, 255, 1, 2, 3, 255, 4, 5, 6, 255, 4, 5, 6, 255}
+	if !bytes.Equal(up, append(append([]byte{}, wantRow...), wantRow...)) {
+		t.Fatalf("upscale: %v", up)
+	}
+	if err := fittedFrame(make([]byte, 1), frame, extent2D{2, 3}, vkFormatRGBA8, false); err == nil {
+		t.Fatal("accepted truncated target")
+	}
+	if err := fittedFrame(make([]byte, 4), frame, extent2D{1, 1}, 999, false); err == nil {
+		t.Fatal("accepted unsupported format")
+	}
+	h := &Host{device: 1, info: DeviceInfo{PresentFence: true}}
+	s := &Swapchain{host: h, swapchain: 1, extent: extent2D{8193, 1}}
+	if err := s.PresentFittedRGBA(frame, false); err == nil || s.poisoned {
+		t.Fatal("invalid size accepted or poisoned swapchain")
+	}
+}
+
 func TestHostMemorySelectionAndInvalidFrameDoesNotPoison(t *testing.T) {
 	p := physicalMemoryProperties{TypeCount: 3}
 	p.Types[0].Flags = vkMemoryHostVisible

@@ -15,15 +15,19 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 2 && (os.Args[1] == "--vulkan-present-probe" || os.Args[1] == "--vulkan-pixel-probe" || os.Args[1] == "--vulkan-guest-frame-probe") {
+	if len(os.Args) == 2 && (os.Args[1] == "--vulkan-present-probe" || os.Args[1] == "--vulkan-pixel-probe" || strings.HasPrefix(os.Args[1], "--vulkan-guest-frame-probe")) {
 		switch os.Getenv("NEKO_TEST_PROBE_HELPER") {
 		case "valid":
-			if os.Args[1] == "--vulkan-guest-frame-probe" {
+			if strings.HasPrefix(os.Args[1], "--vulkan-guest-frame-probe") {
 				frame, err := frameprobe.Read(os.Stdin)
 				if err != nil || frame.Rect.Dx() != 2 || frame.Rect.Dy() != 2 || frame.Pix[0] != 42 || frame.Pix[8] != 99 {
 					os.Exit(2)
 				}
-				fmt.Print(`{"name":"fake","test_surface":{"width":2,"height":2,"format":44,"image_count":3,"pixels_verified":true}}`)
+				if os.Args[1] == "--vulkan-guest-frame-probe=4x3" {
+					fmt.Print(`{"name":"fake","test_surface":{"width":4,"height":3,"format":44,"image_count":3,"pixels_verified":true}}`)
+				} else {
+					fmt.Print(`{"name":"fake","test_surface":{"width":2,"height":2,"format":44,"image_count":3,"pixels_verified":true}}`)
+				}
 				os.Exit(0)
 			}
 			fmt.Print(`{"name":"fake","test_surface":{"width":64,"height":64,"format":44,"image_count":3,"clear_submitted":true,"pixels_verified":true}}`)
@@ -47,18 +51,25 @@ func TestGuestFrameProbeSubprocess(t *testing.T) {
 	parent := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	frame := parent.SubImage(image.Rect(1, 1, 3, 3)).(*image.RGBA)
 	frame.Pix[0], frame.Pix[frame.Stride] = 42, 99
-	info, err := runGuestFrameProbe(context.Background(), frame)
+	info, err := runGuestFrameProbe(context.Background(), frame, 0, 0)
 	if err != nil || info.Name != "fake" || !info.TestSurface.PixelsVerified {
 		t.Fatalf("probe: %+v %v", info, err)
 	}
+	info, err = runGuestFrameProbe(context.Background(), frame, 4, 3)
+	if err != nil || info.TestSurface.Width != 4 || info.TestSurface.Height != 3 {
+		t.Fatalf("scaled probe: %+v %v", info, err)
+	}
+	if _, err = runGuestFrameProbe(context.Background(), frame, 4, 0); err == nil {
+		t.Fatal("accepted partial target dimensions")
+	}
 	t.Setenv("NEKO_TEST_PROBE_HELPER", "invalid")
-	if _, err := runGuestFrameProbe(context.Background(), frame); err == nil {
+	if _, err := runGuestFrameProbe(context.Background(), frame, 0, 0); err == nil {
 		t.Fatal("accepted invalid child response")
 	}
 	t.Setenv("NEKO_TEST_PROBE_HELPER", "wait")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := runGuestFrameProbe(ctx, frame); err == nil || ctx.Err() == nil {
+	if _, err := runGuestFrameProbe(ctx, frame, 0, 0); err == nil || ctx.Err() == nil {
 		t.Fatalf("cancellation did not stop probe: %v", err)
 	}
 }
