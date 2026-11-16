@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/neko233-com/NekoSimulator233/internal/provision"
 )
@@ -33,12 +34,61 @@ type tapTapSetupOps struct {
 // InstallTapTap downloads the official APK into a temporary file, validates
 // the package name and installs it without replacing an existing application.
 func (m Manager) InstallTapTap(ctx context.Context, instance Instance) (TapTapInstallResult, error) {
-	return installTapTap(ctx, tapTapSetupOps{
-		installed: func(ctx context.Context) (bool, error) { return m.hasTapTap(ctx, instance) },
-		download:  provision.DownloadTapTap,
-		verify:    m.verifyTapTapAPK,
-		install:   func(ctx context.Context, path string) error { return m.InstallAPK(ctx, instance, path, false) },
+	result, err := installTapTap(ctx, tapTapSetupOps{
+		installed: func(ctx context.Context) (bool, error) {
+			var installed bool
+			err := m.withTapTapInstance(ctx, instance, func(ctx context.Context, current Instance) error {
+				var err error
+				installed, err = m.hasTapTap(ctx, current)
+				return err
+			})
+			return installed, err
+		},
+		download: provision.DownloadTapTap,
+		verify:   m.verifyTapTapAPK,
+		install: func(ctx context.Context, path string) error {
+			return m.withTapTapInstance(ctx, instance, func(ctx context.Context, current Instance) error {
+				installed, err := m.hasTapTap(ctx, current)
+				if err != nil || installed {
+					return err
+				}
+				return m.InstallAPK(ctx, current, path, false)
+			})
+		},
 	})
+	if err != nil {
+		return result, err
+	}
+	if err := m.markTapTapAutoDone(); err != nil {
+		return result, fmt.Errorf("TapTap 已安装，但无法记录首次准备状态：%w", err)
+	}
+	return result, nil
+}
+
+func sameTapTapInstance(a, b Instance) bool {
+	return a.pid != 0 && a.pid == b.pid && a.port != 0 && a.port == b.port && a.token != "" && a.token == b.token && a.Serial != "" && a.Serial == b.Serial && a.Name != "" && a.Name == b.Name
+}
+
+// Downloading never holds the lifecycle lock. Each package-manager operation
+// revalidates the process and endpoint while holding it, so an instance that
+// was stopped or replaced during the download cannot receive the install.
+func (m Manager) withTapTapInstance(ctx context.Context, original Instance, fn func(context.Context, Instance) error) error {
+	ctx, cancel := context.WithTimeout(ctx, 18*time.Second)
+	defer cancel()
+	unlock, err := m.lockLifecycle(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, err := m.discover()
+	if err != nil || !sameTapTapInstance(original, current) {
+		return errors.New("实例已停止或发生变化，未对其他实例安装 TapTap")
+	}
+	name, err := m.adb(ctx, current.Serial, "emu", "avd", "name")
+	if err != nil || strings.TrimSpace(strings.SplitN(string(name), "\n", 2)[0]) != current.Name {
+		return errors.New("无法确认实例控制端口，未安装 TapTap")
+	}
+	return fn(ctx, current)
 }
 
 func installTapTap(ctx context.Context, ops tapTapSetupOps) (TapTapInstallResult, error) {

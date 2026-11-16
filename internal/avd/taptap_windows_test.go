@@ -78,3 +78,33 @@ func TestTapTapInstallRejectsInvalidOrIncompletePackage(t *testing.T) {
 		t.Fatalf("failed staging not removed: %v", err)
 	}
 }
+
+func TestTapTapInstallRejectsReusedInstanceEndpoint(t *testing.T) {
+	a := Instance{Name: "Alpha", Serial: "emulator-5554", port: 8554, pid: 42, token: "original"}
+	if !sameTapTapInstance(a, a) {
+		t.Fatal("same running instance rejected")
+	}
+	for _, b := range []Instance{
+		{Name: "Alpha", Serial: a.Serial, port: a.port, pid: a.pid, token: "different"},
+		{Name: "Alpha", Serial: a.Serial, port: a.port, pid: 43, token: a.token},
+		{Name: "Alpha", Serial: "emulator-5556", port: a.port, pid: a.pid, token: a.token},
+		{},
+	} {
+		if sameTapTapInstance(a, b) {
+			t.Fatal("changed process or endpoint accepted")
+		}
+	}
+}
+
+func TestTapTapInstallDoesNotRunWhenInstanceIsGone(t *testing.T) {
+	m := backupFixture(t)
+	original := Instance{Name: m.Name, Serial: "emulator-5554", port: 8554, pid: 42, token: "synthetic"}
+	called := false
+	err := m.withTapTapInstance(context.Background(), original, func(context.Context, Instance) error {
+		called = true
+		return nil
+	})
+	if err == nil || called {
+		t.Fatal("operation was allowed without the matching live instance")
+	}
+}

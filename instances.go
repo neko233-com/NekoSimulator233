@@ -38,6 +38,16 @@ func (a *app) selectedStatus() string {
 			case "google_apis":
 				prefix += "Google APIs 镜像（默认不含 Play 商店） · "
 			}
+			switch item.TapTapSetup {
+			case "pending":
+				prefix += "TapTap 首次准备待完成 · "
+			case "retry_pending":
+				prefix += "TapTap 首次准备未完成，可手动重试 · "
+			case "complete":
+				prefix += "TapTap 首次准备完成 · "
+			case "unknown":
+				prefix += "TapTap 首次准备状态未知 · "
+			}
 			switch item.State {
 			case "not_created":
 				return prefix + "上次检查：实例尚未创建"

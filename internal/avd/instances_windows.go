@@ -28,11 +28,12 @@ func (m Manager) WithName(name string) (Manager, error) {
 }
 
 type InstanceSummary struct {
-	Name     string `json:"name"`
-	State    string `json:"state" jsonschema:"not_created, stopped, running or unknown"`
-	API      int    `json:"api,omitempty" jsonschema:"Android system image API level, when recognized"`
-	ImageTag string `json:"image_tag,omitempty" jsonschema:"google_apis_playstore or google_apis when recognized"`
-	Reason   string `json:"reason,omitempty"`
+	Name        string `json:"name"`
+	State       string `json:"state" jsonschema:"not_created, stopped, running or unknown"`
+	API         int    `json:"api,omitempty" jsonschema:"Android system image API level, when recognized"`
+	ImageTag    string `json:"image_tag,omitempty" jsonschema:"google_apis_playstore or google_apis when recognized"`
+	TapTapSetup string `json:"taptap_setup,omitempty" jsonschema:"First-run TapTap task: pending, retry_pending, complete, or unknown"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // ListInstances includes incomplete project directories as unknown instead
@@ -94,12 +95,20 @@ func (m Manager) ListInstances(ctx context.Context) ([]InstanceSummary, error) {
 				}
 				if configErr != nil {
 					item.State, item.Reason = "unknown", "实例镜像配置无效，已保留文件"
-				} else if _, err := candidate.discover(); err == nil {
-					item.State = "running"
-				} else if errors.Is(err, errInstanceNotRunning) {
-					item.State = "stopped"
 				} else {
-					item.State, item.Reason = "unknown", err.Error()
+					setup, setupErr := candidate.TapTapAutoStatus()
+					if setupErr != nil {
+						item.TapTapSetup = "unknown"
+					} else if setup != "not_scheduled" {
+						item.TapTapSetup = setup
+					}
+					if _, err := candidate.discover(); err == nil {
+						item.State = "running"
+					} else if errors.Is(err, errInstanceNotRunning) {
+						item.State = "stopped"
+					} else {
+						item.State, item.Reason = "unknown", err.Error()
+					}
 				}
 			}
 		}

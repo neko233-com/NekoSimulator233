@@ -61,6 +61,12 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 	call("neko_create_instance", map[string]any{"name": "BadAPI", "api": 29}, true)
 	call("neko_create_instance", map[string]any{"name": "alpha"}, true)
 	call("neko_select_instance", map[string]any{"name": "Alpha"}, false)
+	setup := call("neko_taptap_setup_status", map[string]any{}, false)
+	setupJSON, _ := json.Marshal(setup.StructuredContent)
+	var setupStatus TapTapSetupStatus
+	if err := json.Unmarshal(setupJSON, &setupStatus); err != nil || setupStatus.Status != "pending" {
+		t.Fatalf("new instance setup status: %s %v", setupJSON, err)
+	}
 	call("neko_set_resources", map[string]any{"cores": 2, "ram_mib": 1536}, false)
 	call("neko_select_instance", map[string]any{"name": "missing"}, true)
 	list := call("neko_list_instances", map[string]any{}, false)

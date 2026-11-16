@@ -166,6 +166,9 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 	if err := writeNew(config, settings); err != nil {
 		return fmt.Errorf("创建实例配置失败：%w", err)
 	}
+	if err := writeNew(filepath.Join(dir, tapTapPendingFile), tapTapMarkerContents); err != nil {
+		return fmt.Errorf("创建默认应用准备状态失败：%w", err)
+	}
 	if err := writeNew(ini, fmt.Sprintf("avd.ini.encoding=UTF-8\npath=%s\ntarget=android-%s\n", dir, api)); err != nil {
 		return fmt.Errorf("创建实例索引失败，原有数据已保留：%w", err)
 	}
@@ -475,7 +478,11 @@ func (m Manager) Start(ctx context.Context) (Instance, error) {
 		return Instance{}, err
 	}
 	if instance, err := m.discover(); err == nil {
-		return m.waitReady(ctx, instance.Serial)
+		ready, err := m.waitReady(ctx, instance.Serial)
+		if err == nil {
+			m.scheduleTapTap(ready)
+		}
+		return ready, err
 	} else if !errors.Is(err, errInstanceNotRunning) {
 		return Instance{}, err
 	}
@@ -511,7 +518,11 @@ func (m Manager) Start(ctx context.Context) (Instance, error) {
 	}
 	// Reap the launcher without tying the emulator lifetime to the UI window.
 	go func() { _ = cmd.Wait() }()
-	return m.waitReady(ctx, fmt.Sprintf("emulator-%d", port))
+	ready, err := m.waitReady(ctx, fmt.Sprintf("emulator-%d", port))
+	if err == nil {
+		m.scheduleTapTap(ready)
+	}
+	return ready, err
 }
 
 func (m Manager) waitReady(ctx context.Context, serial string) (Instance, error) {
