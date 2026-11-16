@@ -103,6 +103,12 @@ type Package struct {
 type OptionalApp struct {
 	App string `json:"app" jsonschema:"Optional app ID: wechat or douyin"`
 }
+type CoreApp struct {
+	App string `json:"app" jsonschema:"Shortcut app ID: chrome, play, or taptap"`
+}
+type CoreApps struct {
+	Apps []avd.CoreAppStatus `json:"apps"`
+}
 type InstallAPK struct {
 	Path    string `json:"path" jsonschema:"Absolute path to a local APK file"`
 	Replace bool   `json:"replace,omitempty" jsonschema:"Allow replacing an already-installed package"`
@@ -184,6 +190,8 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, rw("neko_hold_key", "Hold a physical USB HID keyboard key for a bounded duration, then release it even if the request is canceled."), s.holdKey)
 	mcp.AddTool(server, rw("neko_text", "Type UTF-8 into the focused field. Non-ASCII temporarily replaces the emulator clipboard; only previous plain text is restored if unchanged."), s.text)
 	mcp.AddTool(server, ro("neko_apps", "List installed third-party package names in the Neko-owned instance."), s.apps)
+	mcp.AddTool(server, ro("neko_core_apps", "Inspect installed and disabled Chrome, Play, Google services, TapTap, WeChat and Douyin packages for the selected Android user. Does not verify login or app functionality."), s.coreApps)
+	mcp.AddTool(server, rw("neko_open_core_app", "Open chrome, play or taptap in the selected instance. If Chrome is missing and Play is enabled, open its Play listing; installation still requires user action."), s.openCoreApp)
 	mcp.AddTool(server, rw("neko_launch_app", "Launch an installed application by package name in the Neko-owned instance."), s.launch)
 	mcp.AddTool(server, rw("neko_install_apk", "Install a local APK into the Neko-owned instance. Replacing an existing package requires replace=true."), s.install)
 	mcp.AddTool(server, rw("neko_install_apks", "Install split APK files atomically into the selected instance. Replacing an existing package requires replace=true."), s.installMultiple)
@@ -669,6 +677,29 @@ func (s *Service) apps(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*m
 	}
 	packages, err := m.ListApps(ctx, i)
 	return nil, Apps{Packages: packages}, err
+}
+func (s *Service) coreApps(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, CoreApps, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, i, err := s.ready(ctx)
+	if err != nil {
+		return nil, CoreApps{}, err
+	}
+	apps, err := m.CoreAppStatuses(ctx, i)
+	return nil, CoreApps{Apps: apps}, err
+}
+func (s *Service) openCoreApp(ctx context.Context, _ *mcp.CallToolRequest, p CoreApp) (*mcp.CallToolResult, avd.CoreAppAction, error) {
+	if p.App != "chrome" && p.App != "play" && p.App != "taptap" {
+		return nil, avd.CoreAppAction{}, errors.New("不支持的快捷应用")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, i, err := s.ready(ctx)
+	if err != nil {
+		return nil, avd.CoreAppAction{}, err
+	}
+	result, err := m.OpenCoreApp(ctx, i, p.App)
+	return nil, result, err
 }
 func (s *Service) launch(ctx context.Context, _ *mcp.CallToolRequest, p Package) (*mcp.CallToolResult, Result, error) {
 	s.mu.Lock()

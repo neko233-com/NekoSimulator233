@@ -382,6 +382,20 @@ func (a *app) view(c *ui.Context) {
 		})
 		ui.Text(c, "备份未加密，包含应用数据；恢复请先填写新的实例名称。").FontSize(12).TextColor(t.TextMuted)
 		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("core-app-status"), "常用应用状态").Disabled(a.busy).Clicked() {
+				a.showCoreAppStatus()
+			}
+			if ui.Button(c.Key("open-chrome"), "打开 Chrome").Disabled(a.busy).Clicked() {
+				a.openCoreApp("chrome", "Chrome")
+			}
+			if ui.Button(c.Key("open-play"), "打开 Google Play").Disabled(a.busy).Clicked() {
+				a.openCoreApp("play", "Google Play")
+			}
+			if ui.Button(c.Key("open-taptap"), "打开 TapTap").Disabled(a.busy).Clicked() {
+				a.openCoreApp("taptap", "TapTap")
+			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c.Key("install-taptap"), "安装 TapTap…").Disabled(a.busy).Clicked() {
 				a.installTapTap()
 			}

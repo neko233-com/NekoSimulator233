@@ -16,6 +16,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 微信和抖音不默认安装。独立实例启动后，可通过主窗口中的对应官方下载按钮在 Android 浏览器打开官方页面，再由用户完成下载和安装；也可使用 Agent 工具 `neko_open_optional_app_download`，参数 `app` 为 `wechat` 或 `douyin`。打开页面不代表下载、安装或应用兼容性验证成功。
 
+“常用应用状态”检查当前 Android 用户的 Chrome、Play 商店、Play 服务、Google 服务框架、TapTap、微信和抖音是否已启用、停用或缺失；这不验证登录或功能。窗口可直接请求打开 Chrome、Google Play 和 TapTap。若 Chrome 缺失且 Play 商店已启用，会打开 Chrome 的官方 Play 页面，由用户在模拟器内完成安装；普通 Google APIs 镜像不保证自带 Chrome 或 Play 商店。Agent 可使用 `neko_core_apps` 和 `neko_open_core_app` 执行相同操作。
+
 新建独立实例首次启动后，会在后台尝试从 TapTap 官方下载入口安装 Android 客户端；画面可以继续使用。实例停止、网络失败或缺少 Android SDK Build Tools 时保留待重试状态，下次启动重试，也可使用“安装 TapTap…”或 Agent 工具 `neko_install_taptap` 手动重试。既有实例和从备份恢复的实例不会自动安装。程序限制下载来源和大小，使用 `aapt` 检查包名，不覆盖已安装应用；下载计算的 SHA-256 用于标识本次文件，并非发布者签名认证。点击“刷新实例”或调用 `neko_taptap_setup_status` 可查看首次准备状态，该状态不是当前安装状态。自动安装流程尚未完成真实应用验收。
 
 主窗口可新建和选择多个独立实例。名称使用英文、数字、点、下划线或连字符；新建时不会覆盖已有实例或不完整目录。启动、关闭、资源设置与 APK 安装作用于当前选中的实例；多个实例各有独立的 Android 数据和资源设置。运行状态是上次检查时的进程状态，可以通过“刷新实例”重新检查。多开会增加宿主资源占用。

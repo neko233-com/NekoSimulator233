@@ -123,3 +123,42 @@ func TestOptionalAppDownloadMCPRejectsUnknownApp(t *testing.T) {
 		t.Fatalf("unknown app accepted: %+v %v", result, err)
 	}
 }
+
+func TestCoreAppToolsAreRegisteredAndRejectUnknownShortcut(t *testing.T) {
+	ctx := context.Background()
+	server := New(func() (avd.Manager, error) {
+		t.Fatal("invalid app accessed an emulator")
+		return avd.Manager{}, nil
+	})
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	listed, err := cs.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"neko_core_apps": false, "neko_open_core_app": false}
+	for _, tool := range listed.Tools {
+		if _, ok := want[tool.Name]; ok {
+			want[tool.Name] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("missing tool %s", name)
+		}
+	}
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_open_core_app", Arguments: map[string]any{"app": "arbitrary"}})
+	if err != nil || !result.IsError {
+		t.Fatalf("unknown app accepted: %+v %v", result, err)
+	}
+}
