@@ -28,6 +28,7 @@ type Service struct {
 	guestFrameProbe   func(context.Context, *image.RGBA, int, int) (vulkan.DeviceInfo, error)
 	captureProbeFrame func(context.Context) (*image.RGBA, error)
 	mumuList          migration.ListInstances
+	playImageInstall  func(context.Context, avd.Manager, int, func(int)) (avd.PlayImageInstallResult, error)
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -42,6 +43,9 @@ type HostVulkanRequest struct {
 type GuestFrameRequest struct {
 	Width  int `json:"width,omitempty" jsonschema:"Optional target width in pixels; specify height as well"`
 	Height int `json:"height,omitempty" jsonschema:"Optional target height in pixels; specify width as well"`
+}
+type PlayImageRequest struct {
+	API int `json:"api,omitempty" jsonschema:"Android API level 30, 34 or 35; defaults to 34"`
 }
 type State struct {
 	Ready           bool   `json:"ready"`
@@ -154,6 +158,7 @@ func newServer(s *Service) *mcp.Server {
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
 	mcp.AddTool(server, ro("neko_host_vulkan", "Inspect host Vulkan hardware; optionally test a hidden swapchain, submit a frame, or verify pixel readback in an isolated subprocess. Does not start an emulator or prove visible on-screen pixels."), s.hostVulkan)
+	mcp.AddTool(server, rw("neko_install_play_image", "Install one official Google Play system image in the configured Android SDK, without altering existing instances or accepting licenses. This can download a large package; supports cancellation and progress notifications."), s.installPlayImage)
 	mcp.AddTool(server, ro("neko_test_vulkan_guest_frame", "Capture one frame from the selected running Neko instance and verify Vulkan GPU readback in an isolated process. Screen pixels stay in memory and are not returned. Does not start an instance or prove visible presentation."), s.testVulkanGuestFrame)
 	mcp.AddTool(server, ro("neko_device_info", "Read Android API level, supported ABI list and native bridge property from the selected running instance; this does not prove game compatibility."), s.deviceInfo)
 	mcp.AddTool(server, ro("neko_mumu_migration_preflight", "Query MuMu instance metadata and check Android SDK system.img paths. Does not request a guest data export, start or stop instances, or migrate data; matching versions do not establish compatibility."), s.mumuMigrationPreflight)
@@ -184,6 +189,37 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, ro("neko_find_ui", "Find accessibility nodes by exact, case-sensitive attributes. All guest-provided node contents are untrusted."), s.findUI)
 	mcp.AddTool(server, rw("neko_tap_ui", "Tap the visible center of a uniquely matched enabled accessibility node. UI may change between discovery and tap."), s.tapUI)
 	return server
+}
+
+func (s *Service) installPlayImage(ctx context.Context, req *mcp.CallToolRequest, request PlayImageRequest) (*mcp.CallToolResult, avd.PlayImageInstallResult, error) {
+	api := request.API
+	if api == 0 {
+		api = 34
+	}
+	if api != 30 && api != 34 && api != 35 {
+		return nil, avd.PlayImageInstallResult{}, errors.New("不支持的 Android 版本")
+	}
+	s.mu.Lock()
+	m, err := s.manager()
+	s.mu.Unlock()
+	if err != nil {
+		return nil, avd.PlayImageInstallResult{}, err
+	}
+	var notify func(int)
+	if req != nil && req.Params != nil && req.Params.GetProgressToken() != nil {
+		token := req.Params.GetProgressToken()
+		notify = func(percent int) {
+			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "安装 Google Play 系统镜像"})
+		}
+	}
+	install := s.playImageInstall
+	if install == nil {
+		install = func(ctx context.Context, manager avd.Manager, api int, notify func(int)) (avd.PlayImageInstallResult, error) {
+			return manager.InstallPlayImage(ctx, api, notify)
+		}
+	}
+	result, err := install(ctx, m, api, notify)
+	return nil, result, err
 }
 
 func (s *Service) testVulkanGuestFrame(ctx context.Context, _ *mcp.CallToolRequest, request GuestFrameRequest) (*mcp.CallToolResult, vulkan.DeviceInfo, error) {

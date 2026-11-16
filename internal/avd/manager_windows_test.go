@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,41 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if record := os.Getenv("NEKO_TEST_FAKE_SDKMANAGER_RECORD"); record != "" {
+		args, err := json.Marshal(os.Args[1:])
+		if err != nil || os.WriteFile(record, args, 0600) != nil {
+			os.Exit(2)
+		}
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil || len(input) != 0 {
+			os.Exit(3)
+		}
+		fmt.Fprintln(os.Stdout, "Downloading 10%")
+		switch os.Getenv("NEKO_TEST_FAKE_SDKMANAGER_MODE") {
+		case "license":
+			fmt.Fprintln(os.Stderr, "License for package not accepted")
+			os.Exit(1)
+		case "wait":
+			time.Sleep(30 * time.Second)
+			os.Exit(0)
+		}
+		image := os.Getenv("NEKO_TEST_FAKE_SDKMANAGER_IMAGE")
+		if image == "" || os.MkdirAll(filepath.Dir(image), 0700) != nil || os.WriteFile(image, []byte("fake system image"), 0600) != nil {
+			os.Exit(4)
+		}
+		metadata := map[string]string{
+			"source.properties": "Pkg.Revision=1\nAndroidVersion.ApiLevel=34\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis_playstore\n",
+			"build.prop":        "ro.build.version.incremental=12077443\n",
+			"package.xml":       "<fake-package/>\n",
+		}
+		for name, data := range metadata {
+			if os.WriteFile(filepath.Join(filepath.Dir(image), name), []byte(data), 0600) != nil {
+				os.Exit(5)
+			}
+		}
+		fmt.Fprintln(os.Stdout, "Installing 100%")
+		os.Exit(0)
+	}
 	if record := os.Getenv("NEKO_TEST_FAKE_EMULATOR_RECORD"); record != "" {
 		args, err := json.Marshal(os.Args[1:])
 		if err != nil || os.WriteFile(record, args, 0600) != nil {

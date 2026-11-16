@@ -121,8 +121,14 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 		if err != nil {
 			return err
 		}
-		_, _, err = systemImageIdentity(values)
-		return err
+		api, tag, err := systemImageIdentity(values)
+		if err != nil {
+			return err
+		}
+		if tag == "google_apis_playstore" && !completePlayImage(filepath.Join(m.SDK, "system-images", fmt.Sprintf("android-%d", api), tag, "x86_64"), api) {
+			return errors.New("Google Play 系统镜像缺失或不完整，未启动实例")
+		}
+		return nil
 	}
 	if exists(ini) || exists(config) {
 		return errors.New("实例配置不完整，已保留现有数据；请检查 AVD 目录")
@@ -135,7 +141,12 @@ func (m Manager) ensureWithAPI(requestedAPI int) error {
 	for _, tag := range []string{"google_apis_playstore", "google_apis"} {
 		for _, level := range levels {
 			p := filepath.Join("system-images", "android-"+level, tag, "x86_64")
-			if exists(filepath.Join(m.SDK, p, "system.img")) {
+			installed := exists(filepath.Join(m.SDK, p, "system.img"))
+			if tag == "google_apis_playstore" {
+				apiNumber, _ := strconv.Atoi(level)
+				installed = completePlayImage(filepath.Join(m.SDK, p), apiNumber)
+			}
+			if installed {
 				imagePath, api, imageTag = p, level, tag
 				break
 			}

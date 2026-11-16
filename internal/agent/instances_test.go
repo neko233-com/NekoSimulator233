@@ -59,6 +59,7 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 		t.Fatalf("MCP did not select Android 11: %s %v", config, err)
 	}
 	call("neko_create_instance", map[string]any{"name": "BadAPI", "api": 29}, true)
+	call("neko_install_play_image", map[string]any{"api": 29}, true)
 	call("neko_create_instance", map[string]any{"name": "alpha"}, true)
 	call("neko_select_instance", map[string]any{"name": "Alpha"}, false)
 	setup := call("neko_taptap_setup_status", map[string]any{}, false)

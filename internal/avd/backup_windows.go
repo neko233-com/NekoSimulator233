@@ -724,7 +724,7 @@ func (m Manager) ImportBackup(ctx context.Context, source string) error {
 		tag = manifest.Settings.ImageTag
 	}
 	imagePath := filepath.Join("system-images", fmt.Sprintf("android-%d", manifest.Settings.API), tag, "x86_64")
-	if !exists(filepath.Join(m.SDK, imagePath, "system.img")) {
+	if !exists(filepath.Join(m.SDK, imagePath, "system.img")) || (tag == "google_apis_playstore" && !completePlayImage(filepath.Join(m.SDK, imagePath), manifest.Settings.API)) {
 		return fmt.Errorf("目标缺少 Android %d %s x86_64 系统镜像", manifest.Settings.API, tag)
 	}
 	props, err := parseINI(filepath.Join(m.SDK, imagePath, "build.prop"))

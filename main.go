@@ -36,6 +36,9 @@ type app struct {
 	newSystem        string
 	backupCancel     context.CancelFunc
 	closeAfterBackup bool
+	sdkCancel        context.CancelFunc
+	closeAfterSDK    bool
+	sdkJob           uint64
 	updateInProgress bool
 	closeAfterUpdate bool
 	suppressedUpdate string
@@ -329,6 +332,13 @@ func (a *app) view(c *ui.Context) {
 		})
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Select(c.Key("new-system"), &a.newSystem, []string{systemAuto, systemAndroid11}).Label("新实例系统").Disabled(a.busy)
+			if ui.Button(c.Key("install-play-image"), "安装 Google Play 镜像…").Disabled(a.busy).Clicked() {
+				a.installPlayImage()
+			}
+			if a.sdkCancel != nil && ui.Button(c.Key("cancel-play-image"), "取消镜像安装").Clicked() {
+				a.sdkCancel()
+				a.message = "正在取消镜像安装…"
+			}
 		})
 		if status := a.selectedStatus(); status != "" {
 			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
@@ -484,6 +494,10 @@ func main() {
 				return
 			}
 			if a.cancelBackupForClose() {
+				e.PreventDefault()
+				return
+			}
+			if a.cancelSDKForClose() {
 				e.PreventDefault()
 			}
 		})

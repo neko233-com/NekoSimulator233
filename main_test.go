@@ -12,10 +12,22 @@ import (
 func TestInstanceView(t *testing.T) {
 	a := &app{message: "已连接", instances: []mumu.Instance{{Index: "0", Name: "测试实例", AndroidVersion: "15.0", AndroidStarted: true}}}
 	tester := ui.NewTester(a.view, 760, 500)
-	for _, want := range []string{"NekoSimulator233", "已连接", "资源设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
+	for _, want := range []string{"NekoSimulator233", "已连接", "安装 Google Play 镜像…", "资源设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
+	}
+}
+
+func TestCloseCancelsSDKInstall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &app{sdkCancel: cancel}
+	if !a.cancelSDKForClose() || !a.closeAfterSDK || ctx.Err() != context.Canceled {
+		t.Fatal("close did not cancel SDK installation")
+	}
+	a.sdkCancel = nil
+	if a.cancelSDKForClose() {
+		t.Fatal("close blocked without SDK installation")
 	}
 }
 

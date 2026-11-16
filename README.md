@@ -2,7 +2,9 @@
 
 Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模式调用本机 Android SDK Emulator、系统镜像和 Windows 虚拟化；兼容模式连接本机 MuMu，不包含或复制其引擎。
 
-独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。新实例优先使用已安装的 Android 34 或 35 `google_apis_playstore/x86_64` 系统镜像；没有时使用 `google_apis/x86_64` 镜像。可在新建时选择已安装的 Android 30 镜像，作为 32 位应用兼容路径。Google Play 镜像需事先通过 SDK Manager 安装，例如 `system-images;android-34;google_apis_playstore;x86_64`；普通 Google APIs 镜像默认不包含 Play 商店。已创建实例不会自动切换镜像。此路径尚未完成真实 Google Play 登录、应用安装或 Vulkan 验证。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，画面窗口均不可见时暂停采集，失焦时释放按住的输入。
+独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。新实例优先使用已安装的 Android 34 或 35 `google_apis_playstore/x86_64` 系统镜像；没有时使用 `google_apis/x86_64` 镜像。可在新建时选择已安装的 Android 30 镜像，作为 32 位应用兼容路径。Google Play 镜像需事先安装，可使用下述入口或 SDK Manager，例如 `system-images;android-34;google_apis_playstore;x86_64`；普通 Google APIs 镜像默认不包含 Play 商店。已创建实例不会自动切换镜像。此路径尚未完成真实 Google Play 登录、应用安装或 Vulkan 验证。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，画面窗口均不可见时暂停采集，失焦时释放按住的输入。
+
+可使用主窗口“安装 Google Play 镜像…”或 MCP 工具 `neko_install_play_image` 安装指定官方镜像，支持进度与取消；默认 Android 34，主窗口选择 Android 11 时使用 API 30，MCP 参数 `api` 还可指定 35。需要 SDK Command-line Tools 和 JDK 17 或更高版本。程序不会自动接受 SDK 许可证；如尚未接受，请在 Android Studio 的 SDK Manager 中查看处理。安装不会改变已有实例，遇到已存在的不完整镜像目录会停止并提示检查。该安装入口尚未完成真实下载验证。
 
 画面窗口的“截图采样上限”可在 15、30、60、120 FPS 之间实时切换，重新打开窗口后恢复 30 FPS。该设置控制截图请求频率，也限制实验画面流的呈现频率；实际显示帧率取决于模拟器、画面传输、宿主性能及显示器，较高设置可能增加资源占用。
 

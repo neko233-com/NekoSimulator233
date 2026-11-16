@@ -23,6 +23,15 @@ func addTestImage(t *testing.T, sdk, tag, build string) string {
 	if err := os.WriteFile(filepath.Join(dir, "build.prop"), []byte("ro.build.version.incremental="+build+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if tag == "google_apis_playstore" {
+		properties := "Pkg.Revision=1\nAndroidVersion.ApiLevel=34\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis_playstore\n"
+		if err := os.WriteFile(filepath.Join(dir, "source.properties"), []byte(properties), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "package.xml"), []byte("<fake-package/>"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return dir
 }
 
@@ -207,5 +216,33 @@ func TestPlayBackupRequiresSameImageTypeAndBuild(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(target.Home, target.Name+".avd", "userdata-qemu.img"))
 	if err != nil || string(got) != "guest-data" {
 		t.Fatalf("restored disk: %q %v", got, err)
+	}
+}
+
+func TestIncompletePlayImageNeverSelectedOrStarted(t *testing.T) {
+	m := backupFixture(t)
+	image := addTestImage(t, m.SDK, "google_apis_playstore", "12077443")
+	if err := m.CreateInstance(context.Background(), "PlayBeforeDamage"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(image, "package.xml")); err != nil {
+		t.Fatal(err)
+	}
+	prior, err := m.WithName("PlayBeforeDamage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prior.Ensure(); err == nil {
+		t.Fatal("existing instance accepted incomplete Play image")
+	}
+	if err := m.CreateInstance(context.Background(), "SafeFallback"); err != nil {
+		t.Fatal(err)
+	}
+	config, err := parseINI(filepath.Join(m.Home, "SafeFallback.avd", "config.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, tag, err := systemImageIdentity(config); err != nil || tag != "google_apis" {
+		t.Fatalf("incomplete image selected: %s %v", tag, err)
 	}
 }
