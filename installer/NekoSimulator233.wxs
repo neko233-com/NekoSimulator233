@@ -17,6 +17,10 @@
           <File Id="MyGoLicenseFile" Name="LICENSE-MyGo.txt" Source="$(var.MyGoLicense)" />
           <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="MyGoLicenseInstalled" Type="integer" Value="1" KeyPath="yes" />
         </Component>
+        <Component Id="JDKConfigurator" Guid="0fcf920e-0c26-4db6-a542-8677f896fa23">
+          <File Id="JDKConfiguratorScript" Name="configure-jdk.ps1" Source="$(var.ConfigureJDK)" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="JDKConfiguratorInstalled" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
@@ -28,6 +32,6 @@
         </Component>
       </Directory>
     </StandardDirectory>
-    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="MyGoLicense" /><ComponentRef Id="Shortcut" /></Feature>
+    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="MyGoLicense" /><ComponentRef Id="JDKConfigurator" /><ComponentRef Id="Shortcut" /></Feature>
   </Package>
 </Wix>

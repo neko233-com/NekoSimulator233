@@ -14,6 +14,7 @@ import (
 
 func fakeSDKManager(t *testing.T) (Manager, string, string, string) {
 	t.Helper()
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	root := filepath.Join(t.TempDir(), "SDK with spaces")
 	tools := filepath.Join(root, "cmdline-tools", "latest")
 	jar := filepath.Join(tools, "lib", "sdkmanager-classpath.jar")
@@ -208,6 +209,7 @@ func TestPlayImageRequiresNativeJavaExecutable(t *testing.T) {
 }
 
 func TestPlayImageFindsAndroidStudioJBR(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	studio := t.TempDir()
 	java := filepath.Join(studio, "jbr", "bin", "java.exe")
 	if err := os.MkdirAll(filepath.Dir(java), 0700); err != nil {
@@ -226,6 +228,49 @@ func TestPlayImageFindsAndroidStudioJBR(t *testing.T) {
 	got, err := sdkManagerJava()
 	if err != nil || got != java {
 		t.Fatalf("JBR discovery: %q %v", got, err)
+	}
+}
+
+func TestSDKManagerUsesExplicitNekoJDKAndRejectsInvalidSettings(t *testing.T) {
+	local := t.TempDir()
+	t.Setenv("LOCALAPPDATA", local)
+	t.Setenv("JAVA_HOME", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("JDK_HOME", "")
+	jdk := filepath.Join(t.TempDir(), "jdk with spaces")
+	java := filepath.Join(jdk, "bin", "java.exe")
+	if err := os.MkdirAll(filepath.Dir(java), 0700); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(self, java); err != nil {
+		t.Skipf("cannot link fake Java: %v", err)
+	}
+	config := filepath.Join(local, "NekoSimulator233-data", "jdk-home.txt")
+	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte(jdk), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sdkManagerJava(); err != nil || got != java {
+		t.Fatalf("configured JDK ignored: %q %v", got, err)
+	}
+	for _, invalid := range []string{"relative", "", strings.Repeat("a", 4097), jdk + "\nother"} {
+		if err := os.WriteFile(config, []byte(invalid), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sdkManagerJava(); err == nil || !strings.Contains(err.Error(), "JDK 配置") {
+			t.Fatalf("invalid config %q accepted: %v", invalid[:min(20, len(invalid))], err)
+		}
+	}
+	if err := os.WriteFile(config, []byte(filepath.Join(t.TempDir(), "missing")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdkManagerJava(); err == nil || !strings.Contains(err.Error(), "架构不匹配") {
+		t.Fatalf("missing configured JDK accepted: %v", err)
 	}
 }
 

@@ -8,6 +8,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 如果已配置的 SDK 只有 Command-line Tools，首次启动会尝试通过该 SDK 安装缺失的 `platform-tools` 和 `emulator`。已有运行组件直接使用；存在但不完整的组件目录不会自动覆盖。此流程需要可用 JDK 及已接受的相应 SDK 许可证，尚不包含从零下载 Command-line Tools 或 JDK，也尚未完成真实下载验收。
 
+如果 `JAVA_HOME` 无效，可使用 `pwsh -File scripts/configure-jdk.ps1 -JdkHome <JDK目录>` 为 Neko 单独指定 x64 JDK 17 或更高版本；MSI 安装版的脚本也位于 `%LOCALAPPDATA%/NekoSimulator233/configure-jdk.ps1`。配置优先于 `JAVA_HOME`，不会更改其他程序的环境变量。替换已有配置需要加 `-Force`；移除 `%LOCALAPPDATA%/NekoSimulator233-data/jdk-home.txt` 后恢复环境变量自动查找。
+
 画面窗口的“截图采样上限”可在 15、30、60、120 FPS 之间实时切换，重新打开窗口后恢复 30 FPS。该设置控制截图请求频率，也限制实验画面流的呈现频率；实际显示帧率取决于模拟器、画面传输、宿主性能及显示器，较高设置可能增加资源占用。
 
 可通过启动前设置 `NEKO_EXPERIMENTAL_STREAM=1` 试用独立实例的事件驱动画面流；画面不可见时停止流，恢复时重新连接，流失败时回退到截图轮询。流持续接收并替换尚未呈现的旧帧，保留最新画面直到界面取走，复用最多两个解码画面缓冲区；上游仍可能按更高频率传输和解码。此路径目前只通过模拟服务测试，尚未完成真实模拟器、游戏和资源占用验证。
@@ -47,14 +49,14 @@ MuMu 实例旁的“检查迁移条件”会查询厂商报告的实例状态和
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.28
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.28-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.29
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.29-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.29-x64.msi -Version 0.1.29
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.30-x64.msi -Version 0.1.30
 ```
 
 安装版在启动时检查清单；运行期间每 10 分钟尝试检查，只有当前登录会话至少 2 分钟没有输入、没有打开画面或资源设置窗口、没有未完成的实例名称或其他操作时才会启动更新。发现更新后校验文件哈希、MSI 产品标识及版本，准备完成时再次检查会话空闲状态和其他本程序进程，然后启动独立更新进程，退出主程序并静默安装，最后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟；安装失败重开后，相同清单在本次运行中不自动重复安装，可修改清单或重新启动程序重试。需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。

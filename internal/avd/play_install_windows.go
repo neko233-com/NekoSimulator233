@@ -126,6 +126,28 @@ func completePlayImage(dir string, api int) bool {
 }
 
 func sdkManagerJava() (string, error) {
+	// An app-specific selection takes precedence over stale machine-wide
+	// environment variables and is shared by the GUI and MCP processes.
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		path := filepath.Join(local, "NekoSimulator233-data", "jdk-home.txt")
+		f, err := os.Open(path)
+		if err == nil {
+			data, readErr := io.ReadAll(io.LimitReader(f, 4097))
+			closeErr := f.Close()
+			home := strings.TrimSpace(string(data))
+			if readErr != nil || closeErr != nil || len(data) > 4096 || !filepath.IsAbs(home) || strings.ContainsAny(home, "\x00\r\n") {
+				return "", errors.New("Neko JDK 配置无效，请检查 jdk-home.txt")
+			}
+			candidate := filepath.Join(home, "bin", "java.exe")
+			if !nativeJava(candidate) {
+				return "", errors.New("Neko JDK 不存在或架构不匹配，请重新配置 jdk-home.txt")
+			}
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("无法读取 Neko JDK 配置：%w", err)
+		}
+	}
 	for _, key := range []string{"JAVA_HOME", "JDK_HOME"} {
 		if base := os.Getenv(key); base != "" {
 			candidate := filepath.Join(base, "bin", "java.exe")
@@ -143,7 +165,7 @@ func sdkManagerJava() (string, error) {
 	if java, err := exec.LookPath("java.exe"); err == nil && nativeJava(java) {
 		return java, nil
 	}
-	return "", errors.New("未找到当前程序架构的 Java；请将 JAVA_HOME 设置为对应架构的 JDK 17 或更高版本")
+	return "", errors.New("未找到当前程序架构的 Java；请配置 Neko JDK 或将 JAVA_HOME 设置为对应架构的 JDK 17 或更高版本")
 }
 
 func nativeJava(path string) bool {
