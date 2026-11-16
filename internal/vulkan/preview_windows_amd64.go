@@ -183,6 +183,9 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 			case <-stop:
 				return
 			}
+			if errors.Is(readErr, frameprobe.ErrInactive) {
+				continue
+			}
 			if readErr != nil {
 				return
 			}
@@ -198,9 +201,29 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 	dispatch := user32.NewProc("DispatchMessageW")
 	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
+	blankPending := false
+	blank := &image.RGBA{Pix: []byte{0, 0, 0, 255}, Stride: 4, Rect: image.Rect(0, 0, 1, 1)}
+	clearDisplay := func() error {
+		if minimized, _, _ := isIconic.Call(hwnd); minimized != 0 {
+			return nil
+		}
+		if err := renderer.PresentFittedRGBA(blank, false); err != nil {
+			return err
+		}
+		blankPending = false
+		return nil
+	}
 	for !closing.Load() {
 		select {
 		case next := <-frames:
+			if errors.Is(next.err, frameprobe.ErrInactive) {
+				frameWidth, frameHeight = 0, 0
+				blankPending = true
+				if err := clearDisplay(); err != nil {
+					return err
+				}
+				continue
+			}
 			if next.err != nil {
 				if errors.Is(next.err, io.EOF) {
 					return nil
@@ -217,6 +240,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				}
 				displayedWidth, displayedHeight = int(info.Width), int(info.Height)
 				frameWidth, frameHeight = next.frame.Bounds().Dx(), next.frame.Bounds().Dy()
+				blankPending = false
 			}
 			select {
 			case returned <- next.frame:
@@ -232,6 +256,11 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				}
 				translate.Call(uintptr(unsafe.Pointer(&msg)))
 				dispatch.Call(uintptr(unsafe.Pointer(&msg)))
+			}
+			if blankPending {
+				if err := clearDisplay(); err != nil {
+					return err
+				}
 			}
 		}
 	}

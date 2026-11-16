@@ -47,6 +47,26 @@ func TestPreviewMouseMappingAndRelease(t *testing.T) {
 	}
 }
 
+func TestPreviewInactiveRejectsInputAndRecovers(t *testing.T) {
+	v := &viewer{width: 4, height: 2, events: make(chan pointerEvent, 8), done: make(chan struct{})}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	<-v.events
+	v.setFrameSize(0, 0)
+	if e := <-v.events; e.kind != releaseKeys {
+		t.Fatalf("inactive did not release keys: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	v.applyPreviewInput(previewinput.Event{Kind: "down", Width: 4, Height: 2, FrameWidth: 4, FrameHeight: 2, X: 1, Y: 1})
+	if len(v.events) != 0 {
+		t.Fatal("inactive frame accepted input")
+	}
+	v.setFrameSize(4, 2)
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	if e := <-v.events; e.kind != keyDown {
+		t.Fatalf("input did not recover: %+v", e)
+	}
+}
+
 func TestPreviewKeysShareMappingsAndReleaseOnlyTheirOwner(t *testing.T) {
 	v := &viewer{width: 100, height: 200, events: make(chan pointerEvent, 16), done: make(chan struct{}), bindings: map[uint16]mappedPoint{0x04: {X: 0.5, Y: 0.5}}}
 	v.handleHostKey(0x06, true) // main window owns C

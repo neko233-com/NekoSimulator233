@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"os"
@@ -34,9 +35,45 @@ func TestMain(m *testing.M) {
 			fmt.Println(`{"kind":"key_up","usage":26}`)
 			fmt.Println(`{"kind":"up"}`)
 			os.Exit(0)
+		case "inactive":
+			if _, err := frameprobe.ReadNext(os.Stdin, nil); !errors.Is(err, frameprobe.ErrInactive) {
+				os.Exit(2)
+			}
+			frame, err := frameprobe.ReadNext(os.Stdin, nil)
+			if err != nil || frame.Pix[0] != 42 {
+				os.Exit(3)
+			}
+			os.Exit(0)
 		}
 	}
 	os.Exit(m.Run())
+}
+
+func TestVulkanPreviewInactiveThenResume(t *testing.T) {
+	t.Setenv("NEKO_TEST_PREVIEW_HELPER", "inactive")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := startVulkanPreview(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	if err = p.inactive(); err != nil {
+		t.Fatal(err)
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	frame.Pix[0] = 42
+	if err = p.send(frame); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-p.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("helper did not exit")
+	}
 }
 
 func TestVulkanPreviewInputPipeAndExitRelease(t *testing.T) {

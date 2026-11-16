@@ -3,6 +3,7 @@ package frameprobe
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"image"
 	"io"
 	"testing"
@@ -39,6 +40,31 @@ func TestRoundTripSubimageAndRejectMalformed(t *testing.T) {
 	}
 	if _, err := Reader(&image.RGBA{Rect: image.Rect(0, 0, 2, 2), Stride: 8, Pix: make([]byte, 8)}); err == nil {
 		t.Fatal("accepted truncated image")
+	}
+}
+
+func TestInactiveControlBetweenFrames(t *testing.T) {
+	first := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	first.Pix[0] = 42
+	r1, _ := Reader(first)
+	r2, _ := Reader(first)
+	stream := io.MultiReader(r1, InactiveReader(), r2)
+	frame, err := ReadNext(stream, nil)
+	if err != nil || frame.Pix[0] != 42 {
+		t.Fatalf("first frame: %v", err)
+	}
+	if got, err := ReadNext(stream, frame); got != nil || !errors.Is(err, ErrInactive) {
+		t.Fatalf("inactive control: %v %v", got, err)
+	}
+	restored, err := ReadNext(stream, frame)
+	if err != nil || restored != frame || restored.Pix[0] != 42 {
+		t.Fatalf("resumed frame: %v", err)
+	}
+	bad := make([]byte, 16)
+	copy(bad, magic)
+	binary.LittleEndian.PutUint32(bad[12:], 1)
+	if _, err := ReadNext(bytes.NewReader(bad), nil); err == nil || errors.Is(err, ErrInactive) {
+		t.Fatal("accepted incomplete inactive control")
 	}
 }
 

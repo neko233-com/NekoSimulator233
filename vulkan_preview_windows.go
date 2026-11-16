@@ -98,10 +98,16 @@ func (p *vulkanPreview) send(frame *image.RGBA) error {
 	if err != nil {
 		return err
 	}
+	return p.sendReader(r)
+}
+
+func (p *vulkanPreview) inactive() error { return p.sendReader(frameprobe.InactiveReader()) }
+
+func (p *vulkanPreview) sendReader(r io.Reader) error {
 	// Closing the child on a stalled pipe bounds shutdown even if a GPU driver hangs.
 	timedOut := make(chan struct{})
 	timer := time.AfterFunc(5*time.Second, func() { close(timedOut); p.cancel() })
-	_, err = io.CopyBuffer(p.input, r, p.buffer[:])
+	_, err := io.CopyBuffer(p.input, r, p.buffer[:])
 	if !timer.Stop() {
 		<-timedOut
 		return errors.New("Vulkan 画面进程超时")

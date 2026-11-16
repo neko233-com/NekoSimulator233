@@ -2,6 +2,7 @@
 package frameprobe
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"image"
@@ -10,6 +11,9 @@ import (
 
 const magic = "NEKOFRM1"
 const maxPixels = 32 * 1024 * 1024
+
+// ErrInactive is a control message indicating that no guest frame is visible.
+var ErrInactive = errors.New("画面暂不可见")
 
 func valid(w, h int) bool { return w > 0 && h > 0 && w <= 8192 && h <= 8192 && w*h <= maxPixels }
 
@@ -59,6 +63,13 @@ func Reader(frame *image.RGBA) (io.Reader, error) {
 	return r, nil
 }
 
+// InactiveReader emits a control message without guest pixels.
+func InactiveReader() io.Reader {
+	var header [16]byte
+	copy(header[:], magic)
+	return bytes.NewReader(header[:])
+}
+
 func Read(r io.Reader) (*image.RGBA, error) {
 	frame, err := ReadNext(r, nil)
 	if err != nil {
@@ -79,6 +90,9 @@ func ReadNext(r io.Reader, dst *image.RGBA) (*image.RGBA, error) {
 		return nil, err
 	}
 	w, h := int(binary.LittleEndian.Uint32(header[8:])), int(binary.LittleEndian.Uint32(header[12:]))
+	if string(header[:8]) == magic && w == 0 && h == 0 {
+		return nil, ErrInactive
+	}
 	if string(header[:8]) != magic || !valid(w, h) {
 		return nil, errors.New("画面管道格式无效")
 	}

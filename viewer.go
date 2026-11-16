@@ -392,6 +392,13 @@ func (v *viewer) presentInactive() bool {
 	})
 	select {
 	case <-ack:
+		if v.preview != nil {
+			if err := v.preview.inactive(); err != nil {
+				v.preview.close()
+				v.preview = nil
+				v.reportPreview(err)
+			}
+		}
 		return true
 	case <-v.done:
 		return false
@@ -522,7 +529,7 @@ func (v *viewer) applyPreviewInput(event previewinput.Event) {
 			}
 			return
 		}
-		if v.editing != 0 {
+		if v.editing != 0 || v.width <= 0 || v.height <= 0 {
 			return
 		}
 		if event.Kind == "key_down" {
