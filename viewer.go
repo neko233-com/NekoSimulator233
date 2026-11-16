@@ -54,6 +54,8 @@ type viewer struct {
 	once          sync.Once
 	streamMu      sync.Mutex
 	streamCancel  context.CancelFunc
+	captureRate   atomic.Int32
+	rateChanged   chan struct{}
 	hidden        atomic.Bool
 	minimized     atomic.Bool
 	bindings      map[uint16]mappedPoint
@@ -69,7 +71,7 @@ type viewer struct {
 }
 
 func openViewer(name string, source display.Session, bindingsPath string, onClosed func()) *viewer {
-	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), message: "正在读取画面…"}
+	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), message: "正在读取画面…"}
 	if _, ok := source.(display.MultiTouch); ok {
 		v.baseKeymap = bindingsPath
 		v.profile = defaultKeymapProfile
@@ -110,6 +112,28 @@ func (v *viewer) cancelStream() {
 	}
 }
 
+// The setting limits polling requests rather than promising displayed FPS.
+// A single notification suffices because the consumer always reads the latest
+// atomic value, even if the user changes the setting several times quickly.
+func (v *viewer) setCaptureRate(rate int) bool {
+	if rate != 15 && rate != 30 && rate != 60 && rate != 120 {
+		return false
+	}
+	v.captureRate.Store(int32(rate))
+	select {
+	case v.rateChanged <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (v *viewer) currentCaptureRate() int {
+	if rate := int(v.captureRate.Load()); rate != 0 {
+		return rate
+	}
+	return 30
+}
+
 func (v *viewer) run() {
 	inputDone := make(chan struct{})
 	go func() {
@@ -136,7 +160,7 @@ func (v *viewer) run() {
 			return
 		}
 	}
-	ticker := time.NewTicker(time.Second / 30)
+	ticker := time.NewTicker(time.Second / time.Duration(v.currentCaptureRate()))
 	defer ticker.Stop()
 	var frames [2]*image.RGBA
 	frameIndex := 0
@@ -144,6 +168,8 @@ func (v *viewer) run() {
 		select {
 		case <-v.done:
 			return
+		case <-v.rateChanged:
+			ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
 		case <-ticker.C:
 			if v.hidden.Load() || v.minimized.Load() {
 				continue
@@ -488,6 +514,18 @@ func (v *viewer) view(c *ui.Context) {
 					v.editing = 2
 					v.screen.Focus(c)
 				}
+			}
+		})
+		ui.Row(c).Gap(6).Children(func() {
+			selected := fmt.Sprintf("%d FPS", v.currentCaptureRate())
+			if ui.Select(c.Key("capture-rate"), &selected, []string{"15 FPS", "30 FPS", "60 FPS", "120 FPS"}).Label("截图采样上限").Changed() {
+				var rate int
+				if _, err := fmt.Sscanf(selected, "%d FPS", &rate); err == nil {
+					v.setCaptureRate(rate)
+				}
+			}
+			if _, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
+				ui.Text(c, "实验画面流不受此设置限制；回退轮询后生效").FontSize(12).TextColor(t.TextMuted)
 			}
 		})
 		if v.keymap != nil && v.editing != 0 {

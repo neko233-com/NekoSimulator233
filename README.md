@@ -4,6 +4,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。默认新实例使用已安装的 Android 34 或 35 `google_apis/x86_64` 系统镜像；也可在新建时选择已安装的 Android 30 镜像，作为 32 位应用兼容路径。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，窗口最小化或隐藏时暂停采集，失焦时释放按住的输入。
 
+画面窗口的“截图采样上限”可在 15、30、60、120 FPS 之间实时切换，重新打开窗口后恢复 30 FPS。上限仅控制截图请求频率，实际显示帧率取决于模拟器、画面传输、宿主性能及显示器；较高设置可能增加资源占用。实验画面流不受该上限控制。
+
 可通过启动前设置 `NEKO_EXPERIMENTAL_STREAM=1` 试用独立实例的事件驱动画面流；画面不可见时停止流，恢复时重新连接，流失败时回退到截图轮询。此路径目前只通过模拟服务测试，尚未完成真实模拟器、游戏和资源占用验证。流按上游产生的画面更新，不限于 30 帧/秒，因此不能保证降低高帧率场景的资源占用。
 
 主窗口的“资源设置…”可调整独立实例的虚拟 CPU 核数和 Android 客户机内存；关闭独立实例后保存，下次启动生效。新实例默认 4 核、2048 MiB；已有实例沿用当前配置，直到主动保存新设置。设置保存在实例目录中，不修改其 Android 数据盘；项目的 `.nekobak` 备份会保留这些值。客户机内存设置不等于宿主实际内存占用，过低可能导致应用运行不稳定。
@@ -29,14 +31,14 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.21
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.21-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.22
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.22-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.22-x64.msi -Version 0.1.22
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.23-x64.msi -Version 0.1.23
 ```
 
 安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
