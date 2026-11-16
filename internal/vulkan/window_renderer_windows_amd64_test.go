@@ -22,6 +22,10 @@ func (s *fakeRenderChain) PresentFittedRGBA(*image.RGBA, bool) error {
 	s.presents++
 	return s.presentErr
 }
+func (s *fakeRenderChain) PresentFittedGPU(*image.RGBA, bool) error {
+	s.presents++
+	return s.presentErr
+}
 func (s *fakeRenderChain) Close() error { s.closes++; return s.closeErr }
 
 func TestWindowRendererResizeAndBusySafety(t *testing.T) {

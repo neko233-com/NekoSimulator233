@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -224,6 +225,7 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 	dispatch := user32.NewProc("DispatchMessageW")
 	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
+	gpuScale := os.Getenv("NEKO_EXPERIMENTAL_VULKAN_GPU_SCALE") == "1"
 	blankPending := false
 	blank := &image.RGBA{Pix: []byte{0, 0, 0, 255}, Stride: 4, Rect: image.Rect(0, 0, 1, 1)}
 	clearDisplay := func() error {
@@ -255,7 +257,11 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 				return next.err
 			}
 			if minimized, _, _ := isIconic.Call(hwnd); minimized == 0 && visibility.canPresent() {
-				if err := renderer.PresentFittedRGBA(next.frame, false); err != nil {
+				present := renderer.PresentFittedRGBA
+				if gpuScale {
+					present = renderer.PresentFittedGPU
+				}
+				if err := present(next.frame, false); err != nil {
 					return err
 				}
 				info, infoErr := renderer.Info()

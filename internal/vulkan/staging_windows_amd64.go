@@ -353,19 +353,35 @@ func (s *Swapchain) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
 	return s.presentRGBA(frame, verify, true)
 }
 
+// PresentFittedGPU attempts GPU scaling only for exact integer upscales.
+// Unsupported formats and other scale ratios use the established CPU path.
+func (s *Swapchain) PresentFittedGPU(frame *image.RGBA, verify bool) error {
+	return s.presentRGBAWithGPU(frame, verify, true, true)
+}
+
 func (s *Swapchain) presentRGBA(frame *image.RGBA, verify, fit bool) error {
-	return s.presentFrame(s.frameRGBAHooks(frame, verify, fit, (*stagingBuffer).create))
+	return s.presentRGBAWithGPU(frame, verify, fit, false)
+}
+
+func (s *Swapchain) presentRGBAWithGPU(frame *image.RGBA, verify, fit, wantGPU bool) error {
+	hooks := s.frameRGBAHooksMode(frame, verify, fit, wantGPU, nil, (*stagingBuffer).create, (*Host).blitProcs)
+	return s.presentFrame(hooks)
 }
 
 func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create func(*stagingBuffer, *Host, int, bool) error) frameHooks {
+	return s.frameRGBAHooksMode(frame, verify, fit, false, nil, create, (*Host).blitProcs)
+}
+
+func (s *Swapchain) frameRGBAHooksMode(frame *image.RGBA, verify, fit, wantGPU bool, usedGPU *bool, create func(*stagingBuffer, *Host, int, bool) error, resolveBlit func(*Host) (blitProcs, error)) frameHooks {
 	var size int
 	var directLetterbox bool
+	var gpuScale bool
 	pack := func(data []byte, compare bool) error {
 		if fit {
 			if compare {
 				return fittedFrame(data, frame, s.extent, s.format.Format, true)
 			}
-			if directLetterbox {
+			if directLetterbox || gpuScale {
 				return frameBytes(data, frame, s.format.Format, false)
 			}
 			return s.fit.pack(data, frame, s.format.Format)
@@ -373,7 +389,8 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 		return frameBytes(data, frame, s.format.Format, compare)
 	}
 	hooks := frameHooks{
-		validate: func(_ *Host) error {
+		complete: func() { s.lastGPUScaled = gpuScale },
+		validate: func(host *Host) error {
 			var err error
 			if fit {
 				var sourceSize int
@@ -391,6 +408,18 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 						size = sourceSize
 					}
 				}
+				if err == nil && wantGPU && s.fit.integerUpscale() && (s.format.Format == vkFormatRGBA8 || s.format.Format == vkFormatBGRA8) {
+					if !s.blitChecked {
+						p, resolveErr := resolveBlit(host)
+						s.blitChecked = true
+						if resolveErr == nil && supportsBlit(p, host, s.format.Format) {
+							s.blit, s.blitSupported = p, true
+						}
+					}
+					if s.blitSupported {
+						gpuScale, size = true, sourceSize
+					}
+				}
 			} else {
 				size, err = frameSize(frame, s.extent)
 			}
@@ -400,13 +429,24 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 			if verify && s.usage&vkUsageTransferSrc == 0 {
 				return errors.New("Vulkan 表面不支持图像回读")
 			}
+			if usedGPU != nil {
+				*usedGPU = gpuScale
+			}
 			return nil
 		},
 		prepare: func(h *Host, op *presentResources) error {
-			if err := op.ensureStaging(h, size, verify && !directLetterbox, create); err != nil {
+			if err := op.ensureStaging(h, size, verify && !directLetterbox && !gpuScale, create); err != nil {
 				return err
 			}
-			if directLetterbox && verify {
+			if gpuScale {
+				if err := op.ensureBlitImage(h, s.blit, uint32(s.fit.sw), uint32(s.fit.sh), s.format.Format); err != nil {
+					return err
+				}
+			} else if op.scaled != nil {
+				op.scaled.release(h)
+				op.scaled = nil
+			}
+			if (directLetterbox || gpuScale) && verify {
 				readSize := int(s.extent.Width) * int(s.extent.Height) * 4
 				if err := ensureBuffer(&op.readback, h, readSize, true, create); err != nil {
 					return err
@@ -419,7 +459,11 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 		},
 		record: func(h *Host, op *presentResources, cmd uintptr, img uint64, rng *imageSubresourceRange) (uint32, uint32, error) {
 			b := op.staging
-			if directLetterbox {
+			if gpuScale {
+				if err := recordScaledFrame(op, cmd, img, rng, s.fit); err != nil {
+					return 0, 0, err
+				}
+			} else if directLetterbox {
 				if err := recordUnscaledLetterbox(op, cmd, img, rng, s.fit); err != nil {
 					return 0, 0, err
 				}
@@ -432,7 +476,7 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 			if !verify {
 				return vkLayoutTransferDst, vkAccessTransferWrite, nil
 			}
-			if directLetterbox {
+			if directLetterbox || gpuScale {
 				b = op.readback
 			}
 			region := bufferImageCopy{Subresource: imageSubresourceLayers{AspectMask: 1, LayerCount: 1}, Extent: extent3D{Width: s.extent.Width, Height: s.extent.Height, Depth: 1}}
@@ -456,7 +500,7 @@ func (s *Swapchain) frameRGBAHooks(frame *image.RGBA, verify, fit bool, create f
 	if verify {
 		hooks.verify = func(h *Host, op *presentResources) error {
 			b := op.staging
-			if directLetterbox {
+			if directLetterbox || gpuScale {
 				b = op.readback
 			}
 			return b.withMapped(h, func(data []byte) error { return pack(data, true) })

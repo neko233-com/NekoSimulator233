@@ -50,6 +50,15 @@ func (p *fitPlan) unscaledLetterbox() bool {
 	return p != nil && p.fw == p.sw && p.fh == p.sh && (p.w != p.sw || p.h != p.sh)
 }
 
+// Integer upscaling samples the same source pixel with both Vulkan's
+// pixel-center nearest filter and the existing input-coordinate mapping.
+func (p *fitPlan) integerUpscale() bool {
+	if p == nil || p.fw <= p.sw || p.fh <= p.sh || p.fw%p.sw != 0 || p.fh%p.sh != 0 {
+		return false
+	}
+	return p.fw/p.sw == p.fh/p.sh
+}
+
 // Called with the host lock held, as part of validating a submission.
 func (s *Swapchain) ensureFitPlan(frame *image.RGBA) error {
 	if s.fit.matches(frame, s.extent) {

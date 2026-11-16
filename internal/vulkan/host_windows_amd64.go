@@ -386,7 +386,7 @@ func ProbeFrame(frame *image.RGBA) (DeviceInfo, error) {
 	if frame == nil || frame.Rect.Dx() <= 0 || frame.Rect.Dy() <= 0 {
 		return DeviceInfo{}, errors.New("画面尺寸无效")
 	}
-	return probeFrame(frame, frame.Rect.Dx(), frame.Rect.Dy(), false)
+	return probeFrame(frame, frame.Rect.Dx(), frame.Rect.Dy(), false, false)
 }
 
 // ProbeFittedFrame tests a scaled frame only in a disposable subprocess.
@@ -394,16 +394,24 @@ func ProbeFittedFrame(frame *image.RGBA, width, height int) (DeviceInfo, error) 
 	if frame == nil || width <= 0 || height <= 0 || width > 8192 || height > 8192 || int64(width)*int64(height) > 32*1024*1024 {
 		return DeviceInfo{}, errors.New("画面尺寸无效")
 	}
-	return probeFrame(frame, width, height, true)
+	return probeFrame(frame, width, height, true, false)
 }
 
-func probeFrame(frame *image.RGBA, width, height int, fit bool) (DeviceInfo, error) {
+// ProbeGPUScaledFrame verifies the experimental integer GPU scale path.
+func ProbeGPUScaledFrame(frame *image.RGBA, width, height int) (DeviceInfo, error) {
+	if frame == nil || width <= 0 || height <= 0 || width > 8192 || height > 8192 || int64(width)*int64(height) > 32*1024*1024 {
+		return DeviceInfo{}, errors.New("画面尺寸无效")
+	}
+	return probeFrame(frame, width, height, true, true)
+}
+
+func probeFrame(frame *image.RGBA, width, height int, fit, gpuScale bool) (DeviceInfo, error) {
 	h, err := OpenHost()
 	if err != nil {
 		return DeviceInfo{}, err
 	}
 	info := h.Info()
-	surface, err := inspectHiddenFrame(h, width, height, false, frame, fit)
+	surface, err := inspectHiddenFrame(h, width, height, false, frame, fit, gpuScale)
 	if err != nil {
 		_ = h.Close()
 		return DeviceInfo{}, err

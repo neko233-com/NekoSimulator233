@@ -143,6 +143,7 @@ type presentResources struct {
 	acquirePending, renderPending, presentPending           bool
 	staging                                                 *stagingBuffer
 	readback                                                *stagingBuffer
+	scaled                                                  *blitImage
 }
 
 func (op *presentResources) releaseIfSafe(h *Host) error {
@@ -173,6 +174,10 @@ func (op *presentResources) releaseIfSafe(h *Host) error {
 	if op.readback != nil {
 		op.readback.release(h)
 		op.readback = nil
+	}
+	if op.scaled != nil {
+		op.scaled.release(h)
+		op.scaled = nil
 	}
 	if op.pool != 0 {
 		_, _ = call(op.procs.destroyPool, h.device, uintptr(op.pool), 0)
@@ -294,7 +299,7 @@ func (s *Swapchain) PresentClear(color [4]float32) (err error) {
 		_, err := call(op.procs.clear, cmd, uintptr(image), vkLayoutTransferDst, uintptr(unsafe.Pointer(&color[0])), 1, uintptr(unsafe.Pointer(rangeInfo)))
 		runtime.KeepAlive(color)
 		return vkLayoutTransferDst, vkAccessTransferWrite, err
-	}})
+	}, complete: func() { s.lastGPUScaled = false }})
 }
 
 type frameHooks struct {
@@ -302,6 +307,7 @@ type frameHooks struct {
 	prepare  func(*Host, *presentResources) error
 	record   func(*Host, *presentResources, uintptr, uint64, *imageSubresourceRange) (uint32, uint32, error)
 	verify   func(*Host, *presentResources) error
+	complete func()
 }
 
 func (s *Swapchain) presentFrame(hooks frameHooks) (err error) {
@@ -459,6 +465,9 @@ func (s *Swapchain) presentFrameWith(hooks frameHooks, resolve func(*Host) (pres
 	}
 	if suboptimal {
 		return swapchainResult("vkAcquireNextImageKHR", vkSuboptimal)
+	}
+	if hooks.complete != nil {
+		hooks.complete()
 	}
 	return nil
 }

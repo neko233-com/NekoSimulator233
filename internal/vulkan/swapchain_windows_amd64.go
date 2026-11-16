@@ -77,6 +77,9 @@ type Swapchain struct {
 	reusable                         *presentResources
 	poisoned                         bool
 	fit                              *fitPlan
+	blitChecked, blitSupported       bool
+	blit                             blitProcs
+	lastGPUScaled                    bool
 }
 
 type SwapchainInfo struct {
@@ -86,12 +89,13 @@ type SwapchainInfo struct {
 	ImageCount     int    `json:"image_count"`
 	ClearSubmitted bool   `json:"clear_submitted,omitempty"`
 	PixelsVerified bool   `json:"pixels_verified,omitempty"`
+	GPUScaled      bool   `json:"gpu_scaled,omitempty"`
 }
 
 func (s *Swapchain) Info() SwapchainInfo {
 	s.host.mu.Lock()
 	defer s.host.mu.Unlock()
-	return SwapchainInfo{Width: s.extent.Width, Height: s.extent.Height, Format: s.format.Format, ImageCount: len(s.images)}
+	return SwapchainInfo{Width: s.extent.Width, Height: s.extent.Height, Format: s.format.Format, ImageCount: len(s.images), GPUScaled: s.lastGPUScaled}
 }
 
 func windowSize(hwnd uintptr) (extent2D, error) {

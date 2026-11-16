@@ -13,6 +13,7 @@ type renderSwapchain interface {
 	PresentClear([4]float32) error
 	PresentRGBA(*image.RGBA, bool) error
 	PresentFittedRGBA(*image.RGBA, bool) error
+	PresentFittedGPU(*image.RGBA, bool) error
 	Close() error
 }
 
@@ -114,6 +115,9 @@ func (r *WindowRenderer) PresentRGBA(frame *image.RGBA, verify bool) error {
 }
 func (r *WindowRenderer) PresentFittedRGBA(frame *image.RGBA, verify bool) error {
 	return r.present(func(s renderSwapchain) error { return s.PresentFittedRGBA(frame, verify) })
+}
+func (r *WindowRenderer) PresentFittedGPU(frame *image.RGBA, verify bool) error {
+	return r.present(func(s renderSwapchain) error { return s.PresentFittedGPU(frame, verify) })
 }
 
 func (r *WindowRenderer) Close() error {
