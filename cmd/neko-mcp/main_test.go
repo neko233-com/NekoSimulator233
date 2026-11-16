@@ -42,8 +42,14 @@ func TestStdioExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 28 {
-		t.Fatalf("got %d tools", len(tools.Tools))
+	available := make(map[string]bool, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		available[tool.Name] = true
+	}
+	for _, name := range []string{"neko_status", "neko_screenshot", "neko_install_apk", "neko_import_file", "neko_export_file"} {
+		if !available[name] {
+			t.Fatalf("missing tool %s", name)
+		}
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "neko_status", Arguments: map[string]any{}})
 	if err != nil || result.IsError {

@@ -369,6 +369,9 @@ func (a *app) view(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("import-file"), "导入文件…").Disabled(a.busy).Clicked() {
+				a.chooseImportFile()
+			}
 			if ui.Button(c.Key("backup-instance"), "备份选中实例…").Disabled(a.busy).Clicked() {
 				a.transferBackup(false)
 			}

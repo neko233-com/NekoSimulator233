@@ -14,6 +14,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 独立实例启动后，可在主窗口选择“安装 APK…”安装本地 APK；已有同名应用时安装会拒绝覆盖。需要升级已有应用时使用“更新 APK…”，Android 仍会检查包签名和版本。分包应用可以同时选择属于同一应用的基础 APK 和各个 split APK，一次提交给 Android 安装；`.apks`、`.xapk` 压缩包需要先自行解包。安装结果显示在主窗口，操作针对当前选中的独立实例。
 
+主窗口“导入文件…”可把一个本机文件复制到当前实例的 Android 下载目录，并显示实际路径。每次传输使用独立子目录；失败或取消时，Android 端可能保留临时文件。Agent 可用 `neko_import_file` 导入，或用 `neko_export_file` 将 Android 文件复制到新的本机路径；导出不会覆盖已有目标。文件传输期间关闭实例会等待当前操作，等待超时可重试。目前只支持单文件，尚未完成真实实例传输验收。
+
 微信和抖音不默认安装。独立实例启动后，可通过主窗口中的对应官方下载按钮在 Android 浏览器打开官方页面，再由用户完成下载和安装；也可使用 Agent 工具 `neko_open_optional_app_download`，参数 `app` 为 `wechat` 或 `douyin`。打开页面不代表下载、安装或应用兼容性验证成功。
 
 “常用应用状态”检查当前 Android 用户的 Chrome、Play 商店、Play 服务、Google 服务框架、TapTap、微信和抖音是否已启用、停用或缺失；这不验证登录或功能。窗口可直接请求打开 Chrome、Google Play 和 TapTap。若 Chrome 缺失且 Play 商店已启用，会打开 Chrome 的官方 Play 页面，由用户在模拟器内完成安装；普通 Google APIs 镜像不保证自带 Chrome 或 Play 商店。Agent 可使用 `neko_core_apps` 和 `neko_open_core_app` 执行相同操作。

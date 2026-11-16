@@ -146,7 +146,7 @@ func TestCoreAppToolsAreRegisteredAndRejectUnknownShortcut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"neko_core_apps": false, "neko_open_core_app": false}
+	want := map[string]bool{"neko_core_apps": false, "neko_open_core_app": false, "neko_import_file": false, "neko_export_file": false}
 	for _, tool := range listed.Tools {
 		if _, ok := want[tool.Name]; ok {
 			want[tool.Name] = true
