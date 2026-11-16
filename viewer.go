@@ -222,8 +222,6 @@ func (v *viewer) presentFrame(frame *image.RGBA) bool {
 // runStream returns false on a stream failure, allowing the existing polling
 // transport to take over. Hidden/minimized windows cancel the stream.
 func (v *viewer) runStream(source display.FrameStreamer) bool {
-	var frames [2]*image.RGBA
-	index := 0
 	for {
 		select {
 		case <-v.done:
@@ -259,30 +257,56 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 		var startTimedOut atomic.Bool
 		startTimer := time.AfterFunc(5*time.Second, func() { startTimedOut.Store(true); cancel() })
 		stream, err := source.OpenFrameStream(ctx)
+		var pumpDone <-chan struct{}
+		var ready <-chan pumpedFrame
+		var frames <-chan pumpedFrame
+		var available chan<- *image.RGBA
+		var ticker *time.Ticker
+		if err == nil {
+			frames, available, pumpDone = pumpFrames(ctx, stream)
+			ticker = time.NewTicker(time.Second / time.Duration(v.currentCaptureRate()))
+		}
 		for err == nil {
-			var frame *image.RGBA
-			frame, err = stream.Next(frames[index])
-			startTimer.Stop()
-			if ctx.Err() != nil {
-				break
-			}
-			if errors.Is(err, display.ErrDisplayInactive) {
-				if !v.presentInactive() {
-					cancel()
-					return true
-				}
-				err = nil
-				continue
-			}
-			if err != nil || ctx.Err() != nil {
-				break
-			}
-			frames[index] = frame
-			if !v.presentFrame(frame) {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-v.done:
 				cancel()
-				return true
+				err = context.Canceled
+			case <-v.rateChanged:
+				ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
+			case <-ticker.C:
+				ready = frames
+			case next, ok := <-ready:
+				ready = nil
+				startTimer.Stop()
+				if !ok {
+					err = errors.New("画面流已结束")
+					break
+				}
+				if errors.Is(next.err, display.ErrDisplayInactive) {
+					if !v.presentInactive() {
+						cancel()
+						err = context.Canceled
+					}
+				} else if next.err != nil {
+					err = next.err
+				} else {
+					presented := v.presentFrame(next.frame)
+					if !presented {
+						cancel()
+						err = context.Canceled
+					} else {
+						select {
+						case available <- next.frame:
+						case <-ctx.Done():
+						}
+					}
+				}
 			}
-			index = 1 - index
+		}
+		if ticker != nil {
+			ticker.Stop()
 		}
 		v.streamMu.Lock()
 		v.streamCancel = nil
@@ -290,6 +314,9 @@ func (v *viewer) runStream(source display.FrameStreamer) bool {
 		startTimer.Stop()
 		interrupted := ctx.Err() != nil
 		cancel()
+		if pumpDone != nil {
+			<-pumpDone
+		}
 		select {
 		case <-v.done:
 			return true
@@ -525,7 +552,7 @@ func (v *viewer) view(c *ui.Context) {
 				}
 			}
 			if _, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
-				ui.Text(c, "实验画面流不受此设置限制；回退轮询后生效").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "实验画面流按此上限呈现；上游仍可能产生更多画面").FontSize(12).TextColor(t.TextMuted)
 			}
 		})
 		if v.keymap != nil && v.editing != 0 {
