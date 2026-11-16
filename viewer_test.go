@@ -7,10 +7,57 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
 )
+
+type slowCaptureSession struct {
+	capturing chan struct{}
+	unblock   chan struct{}
+	input     chan struct{}
+	released  chan struct{}
+	closed    chan struct{}
+}
+
+func (s *slowCaptureSession) Capture(*image.RGBA) (*image.RGBA, error) {
+	close(s.capturing)
+	<-s.unblock
+	return image.NewRGBA(image.Rect(0, 0, 1, 1)), nil
+}
+func (s *slowCaptureSession) TouchDown(int, int) error { close(s.input); return nil }
+func (s *slowCaptureSession) TouchUp() error           { close(s.released); return nil }
+func (s *slowCaptureSession) Close() error             { close(s.closed); return nil }
+
+func TestViewerProcessesAndReleasesInputDuringSlowCapture(t *testing.T) {
+	s := &slowCaptureSession{capturing: make(chan struct{}), unblock: make(chan struct{}), input: make(chan struct{}), released: make(chan struct{}), closed: make(chan struct{})}
+	v := &viewer{source: s, events: make(chan pointerEvent, 1), done: make(chan struct{})}
+	go v.run()
+	wait := func(ch <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal(message)
+		}
+	}
+	defer func() {
+		v.stop()
+		close(s.unblock)
+		wait(s.closed, "session did not close after capture finished")
+	}()
+	wait(s.capturing, "capture did not start")
+	v.events <- pointerEvent{kind: pointerDown, x: 1, y: 1}
+	wait(s.input, "input was blocked by the pending capture")
+	v.stop()
+	wait(s.released, "input was not released while capture was pending")
+	select {
+	case <-s.closed:
+		t.Fatal("session closed before capture finished")
+	default:
+	}
+}
 
 func TestJoystickDirectionsAndRelease(t *testing.T) {
 	s := &fakeMultiSession{}

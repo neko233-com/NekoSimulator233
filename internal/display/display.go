@@ -9,7 +9,8 @@ import (
 
 type Session interface {
 	// Capture fills dst when its size matches. The caller must not provide a
-	// buffer still being read by a renderer; it owns the returned frame.
+	// buffer still being read by a renderer; it owns the returned frame. Capture
+	// may run concurrently with input methods. Close runs after both finish.
 	Capture(dst *image.RGBA) (*image.RGBA, error)
 	TouchDown(x, y int) error
 	TouchUp() error

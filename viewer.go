@@ -90,9 +90,26 @@ func openViewer(name string, source display.Session, onClosed func()) *viewer {
 func (v *viewer) stop() { v.once.Do(func() { close(v.done) }) }
 
 func (v *viewer) run() {
-	defer v.source.Close()
-	input := newViewerInput(v.source)
-	defer input.release()
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		input := newViewerInput(v.source)
+		defer input.release()
+		for {
+			select {
+			case <-v.done:
+				return
+			case ev := <-v.events:
+				if err := input.handle(ev); err != nil {
+					v.reportInput(err)
+				}
+			}
+		}
+	}()
+	defer func() {
+		<-inputDone
+		_ = v.source.Close()
+	}()
 	ticker := time.NewTicker(time.Second / 30)
 	defer ticker.Stop()
 	var frames [2]*image.RGBA
@@ -101,15 +118,16 @@ func (v *viewer) run() {
 		select {
 		case <-v.done:
 			return
-		case ev := <-v.events:
-			if err := input.handle(ev); err != nil {
-				v.reportInput(err)
-			}
 		case <-ticker.C:
 			if v.hidden.Load() || v.minimized.Load() {
 				continue
 			}
 			frame, err := v.source.Capture(frames[frameIndex])
+			select {
+			case <-v.done:
+				return
+			default:
+			}
 			if err != nil {
 				v.report(err)
 				continue
