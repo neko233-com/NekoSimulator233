@@ -46,6 +46,8 @@ type viewer struct {
 	width, height int
 	message       string
 	inputError    string
+	previewError  string
+	preview       *vulkanPreview
 	held          bool
 	keys          map[uint16]bool
 	screen        ui.Handle
@@ -135,6 +137,24 @@ func (v *viewer) currentCaptureRate() int {
 }
 
 func (v *viewer) run() {
+	if os.Getenv("NEKO_EXPERIMENTAL_VULKAN_VIEWER") == "1" {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-v.done:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		preview, err := startVulkanPreview(ctx)
+		if err != nil {
+			v.reportPreview(err)
+		} else {
+			v.preview = preview
+			defer preview.close()
+		}
+	}
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
@@ -213,10 +233,28 @@ func (v *viewer) presentFrame(frame *image.RGBA) bool {
 	})
 	select {
 	case <-ack:
+		if v.preview != nil {
+			if err := v.preview.send(frame); err != nil {
+				v.preview.close()
+				v.preview = nil
+				v.reportPreview(err)
+			}
+		}
 		return true
 	case <-v.done:
 		return false
 	}
+}
+
+func (v *viewer) reportPreview(err error) {
+	v.win.Update(func() {
+		select {
+		case <-v.done:
+			return
+		default:
+		}
+		v.previewError = "实验 Vulkan 画面不可用：" + err.Error()
+	})
 }
 
 // runStream returns false on a stream failure, allowing the existing polling
@@ -479,6 +517,9 @@ func (v *viewer) view(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Gap(4).Children(func() {
 		message := v.message
+		if v.previewError != "" {
+			message = v.previewError
+		}
 		if v.inputError != "" {
 			message = v.inputError
 		}

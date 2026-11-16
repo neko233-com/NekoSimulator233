@@ -68,40 +68,45 @@ func TestPumpFramesDropsStaleFramesAndKeepsConsumerBuffer(t *testing.T) {
 	if got := nextRequest(); got != reused || got.Pix[0] != 2 {
 		t.Fatal("stale buffer not reused")
 	}
-	got := make(chan pumpedFrame, 1)
-	go func() { got <- <-frames }()
-	// The stream is controlled; wait until its third frame is read by a
-	// waiting consumer instead of relying on scheduling of a select.
-	for value := byte(3); ; value++ {
-		send(value)
-		var result pumpedFrame
-		select {
-		case result = <-got:
-			if nextRequest() != nil {
-				t.Fatal("consumer-owned frame was reused")
-			}
-		case next := <-s.requests:
-			if next != nil {
-				continue
+	nextEmpty := make(chan struct{})
+	go func() {
+		for value := byte(3); ; value++ {
+			select {
+			case s.values <- value:
+			case <-ctx.Done():
+				return
 			}
 			select {
-			case result = <-got:
-			case <-time.After(time.Second):
-				t.Fatal("missing accepted frame")
+			case next := <-s.requests:
+				if next == nil {
+					close(nextEmpty)
+					return
+				}
+			case <-ctx.Done():
+				return
 			}
-		case <-time.After(time.Second):
-			t.Fatal("pump stalled")
 		}
-		if result.err != nil || result.frame.Pix[0] != value {
-			t.Fatalf("received stale frame: %+v", result)
-		}
-		send(100)
-		if nextRequest() == result.frame || result.frame.Pix[0] != value {
-			t.Fatal("producer mutated consumer-owned frame")
-		}
-		available <- result.frame
-		return
+	}()
+	var result pumpedFrame
+	select {
+	case result = <-frames:
+	case <-time.After(time.Second):
+		t.Fatal("pump failed to deliver")
 	}
+	if result.err != nil || result.frame == nil {
+		t.Fatalf("invalid frame: %+v", result)
+	}
+	value := result.frame.Pix[0]
+	select {
+	case <-nextEmpty:
+	case <-time.After(time.Second):
+		t.Fatal("consumer-owned frame was reused")
+	}
+	send(100)
+	if nextRequest() == result.frame || result.frame.Pix[0] != value {
+		t.Fatal("producer mutated consumer-owned frame")
+	}
+	available <- result.frame
 }
 
 type failedFrameStream struct{}

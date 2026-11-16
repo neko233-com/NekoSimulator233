@@ -2,7 +2,6 @@
 package frameprobe
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"image"
@@ -14,28 +13,67 @@ const maxPixels = 32 * 1024 * 1024
 
 func valid(w, h int) bool { return w > 0 && h > 0 && w <= 8192 && h <= 8192 && w*h <= maxPixels }
 
+type frameReader struct {
+	header      [16]byte
+	headerRead  int
+	frame       *image.RGBA
+	row, offset int
+}
+
+func (r *frameReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	n := copy(p, r.header[r.headerRead:])
+	r.headerRead += n
+	for n < len(p) && r.row < r.frame.Rect.Dy() {
+		width := r.frame.Rect.Dx() * 4
+		start := r.row*r.frame.Stride + r.offset
+		count := copy(p[n:], r.frame.Pix[start:r.row*r.frame.Stride+width])
+		n += count
+		r.offset += count
+		if r.offset == width {
+			r.row++
+			r.offset = 0
+		}
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
 // Reader sends visible row data only; padding and unrelated parent image pixels stay private.
 func Reader(frame *image.RGBA) (io.Reader, error) {
 	if frame == nil || !valid(frame.Rect.Dx(), frame.Rect.Dy()) {
 		return nil, errors.New("画面尺寸无效")
 	}
 	w, h := frame.Rect.Dx(), frame.Rect.Dy()
-	if frame.Stride < w*4 || int64(h-1)*int64(frame.Stride)+int64(w*4) > int64(len(frame.Pix)) {
+	if frame.Stride < w*4 || (h > 1 && frame.Stride > (int(^uint(0)>>1)-w*4)/(h-1)) || (h-1)*frame.Stride+w*4 > len(frame.Pix) {
 		return nil, errors.New("画面像素数据无效")
 	}
-	header := make([]byte, 16)
-	copy(header, magic)
-	binary.LittleEndian.PutUint32(header[8:], uint32(w))
-	binary.LittleEndian.PutUint32(header[12:], uint32(h))
-	rows := make([]io.Reader, 0, h+1)
-	rows = append(rows, bytes.NewReader(header))
-	for y := 0; y < h; y++ {
-		rows = append(rows, bytes.NewReader(frame.Pix[y*frame.Stride:y*frame.Stride+w*4]))
-	}
-	return io.MultiReader(rows...), nil
+	r := &frameReader{frame: frame}
+	copy(r.header[:], magic)
+	binary.LittleEndian.PutUint32(r.header[8:], uint32(w))
+	binary.LittleEndian.PutUint32(r.header[12:], uint32(h))
+	return r, nil
 }
 
 func Read(r io.Reader) (*image.RGBA, error) {
+	frame, err := ReadNext(r, nil)
+	if err != nil {
+		return nil, err
+	}
+	var extra [1]byte
+	if n, err := io.ReadFull(r, extra[:]); n != 0 || err != io.EOF {
+		return nil, errors.New("画面管道包含额外数据")
+	}
+	return frame, nil
+}
+
+// ReadNext reads one self-delimiting frame from a stream, reusing dst when
+// dimensions match. The caller retains exclusive ownership until returned.
+func ReadNext(r io.Reader, dst *image.RGBA) (*image.RGBA, error) {
 	var header [16]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
@@ -44,13 +82,12 @@ func Read(r io.Reader) (*image.RGBA, error) {
 	if string(header[:8]) != magic || !valid(w, h) {
 		return nil, errors.New("画面管道格式无效")
 	}
-	frame := image.NewRGBA(image.Rect(0, 0, w, h))
+	frame := dst
+	if frame == nil || frame.Rect != image.Rect(0, 0, w, h) || frame.Stride != w*4 || len(frame.Pix) != w*h*4 {
+		frame = image.NewRGBA(image.Rect(0, 0, w, h))
+	}
 	if _, err := io.ReadFull(r, frame.Pix); err != nil {
 		return nil, err
-	}
-	var extra [1]byte
-	if n, err := io.ReadFull(r, extra[:]); n != 0 || err != io.EOF {
-		return nil, errors.New("画面管道包含额外数据")
 	}
 	return frame, nil
 }

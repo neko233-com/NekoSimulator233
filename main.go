@@ -14,6 +14,7 @@ import (
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 	"github.com/neko233-com/NekoSimulator233/internal/update"
+	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
 var version = "0.0.0"
@@ -390,6 +391,13 @@ func prepareUpdate() (bool, string) {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--vulkan-preview-worker" {
+		if err := vulkan.RunPreview(os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--update-worker" {
 		_ = update.Worker(os.Args[2:])
 		return

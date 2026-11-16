@@ -41,3 +41,26 @@ func TestRoundTripSubimageAndRejectMalformed(t *testing.T) {
 		t.Fatal("accepted truncated image")
 	}
 }
+
+func TestReadNextReusesBufferAndRejectsTruncation(t *testing.T) {
+	a := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	b := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	a.Pix[0], b.Pix[0] = 11, 22
+	ar, _ := Reader(a)
+	br, _ := Reader(b)
+	stream := io.MultiReader(ar, br)
+	first, err := ReadNext(stream, nil)
+	if err != nil || first.Pix[0] != 11 {
+		t.Fatalf("first frame: %v", err)
+	}
+	second, err := ReadNext(stream, first)
+	if err != nil || second != first || second.Pix[0] != 22 {
+		t.Fatalf("frame reuse: %v", err)
+	}
+	if _, err = ReadNext(stream, second); err != io.EOF {
+		t.Fatalf("stream end: %v", err)
+	}
+	if _, err = Reader(&image.RGBA{Rect: image.Rect(0, 0, 1, 3), Stride: int(^uint(0) >> 1), Pix: make([]byte, 4)}); err == nil {
+		t.Fatal("accepted overflowing stride")
+	}
+}
