@@ -12,6 +12,8 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。独立模�
 
 独立实例启动后，可在主窗口选择“安装 APK…”安装本地 APK；已有同名应用时安装会拒绝覆盖。需要升级已有应用时使用“更新 APK…”，Android 仍会检查包签名和版本。安装结果显示在主窗口，不影响 MuMu 实例。
 
+微信和抖音不默认安装。独立实例启动后，可通过主窗口中的对应官方下载按钮在 Android 浏览器打开官方页面，再由用户完成下载和安装；也可使用 Agent 工具 `neko_open_optional_app_download`，参数 `app` 为 `wechat` 或 `douyin`。打开页面不代表下载、安装或应用兼容性验证成功。
+
 主窗口可新建和选择多个独立实例。名称使用英文、数字、点、下划线或连字符；新建时不会覆盖已有实例或不完整目录。启动、关闭、资源设置与 APK 安装作用于当前选中的实例；多个实例各有独立的 Android 数据和资源设置。运行状态是上次检查时的进程状态，可以通过“刷新实例”重新检查。多开会增加宿主资源占用。
 
 Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；Google 也记录了部分 ARMv7 程序可能不兼容，实际运行和 Vulkan 支持仍取决于镜像、驱动和应用。若 SDK 缺少该镜像，可在 SDK Manager 安装 `system-images;android-30;google_apis;x86_64`。新系统选择只用于创建新实例，不会升级、降级或修改已有实例的系统镜像。参考 [Android Emulator 官方版本说明](https://developer.android.com/studio/releases/emulator)。

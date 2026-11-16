@@ -32,6 +32,10 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]")
 			os.Exit(1)
 		}
+		if os.Getenv("NEKO_TEST_FAKE_ADB_INTENT") != "" {
+			fmt.Println(os.Getenv("NEKO_TEST_FAKE_ADB_INTENT"))
+			os.Exit(0)
+		}
 		if os.Getenv("NEKO_TEST_FAKE_ADB_PROPERTIES") == "1" {
 			props := map[string]string{"ro.build.version.sdk": "30", "ro.product.cpu.abilist": "x86_64,x86,arm64-v8a,armeabi-v7a,armeabi", "ro.dalvik.vm.native.bridge": "libndk_translation.so"}
 			fmt.Println(props[os.Args[len(os.Args)-1]])

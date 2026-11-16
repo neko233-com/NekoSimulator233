@@ -99,3 +99,27 @@ func TestUISelectorMCPRegistrationAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionalAppDownloadMCPRejectsUnknownApp(t *testing.T) {
+	ctx := context.Background()
+	server := New(func() (avd.Manager, error) {
+		t.Fatal("invalid app accessed an emulator")
+		return avd.Manager{}, nil
+	})
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_open_optional_app_download", Arguments: map[string]any{"app": "https://example.com"}})
+	if err != nil || !result.IsError {
+		t.Fatalf("unknown app accepted: %+v %v", result, err)
+	}
+}

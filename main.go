@@ -371,6 +371,14 @@ func (a *app) view(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "备份未加密，包含应用数据；恢复请先填写新的实例名称。").FontSize(12).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("download-wechat"), "微信官方下载…").Disabled(a.busy).Clicked() {
+				a.openOptionalDownload("wechat", "微信")
+			}
+			if ui.Button(c.Key("download-douyin"), "抖音官方下载…").Disabled(a.busy).Clicked() {
+				a.openOptionalDownload("douyin", "抖音")
+			}
+		})
 		if ui.Button(c.Key("refresh"), "刷新实例").Disabled(a.busy).Clicked() {
 			a.refresh()
 		}
