@@ -228,6 +228,10 @@ func decodeFragmentedFrame(data mem.BufferSlice, response *frameResponse) error 
 	if height == 0 {
 		height = oldHeight
 	}
+	if response.allowEmpty && width == 0 && height == 0 && pixelSize == 0 {
+		response.empty = true
+		return nil
+	}
 	if format != 1 || width == 0 || height == 0 || width > 8192 || height > 8192 || width*height > 32*1024*1024 || uint64(pixelSize) != width*height*4 {
 		return errors.New("模拟器画面尺寸或像素数据无效")
 	}

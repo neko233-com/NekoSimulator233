@@ -3,9 +3,24 @@
 package display
 
 import (
+	"context"
+	"errors"
 	"image"
 	"math"
 )
+
+// ErrDisplayInactive indicates that a streaming display currently has no
+// visible image. The stream remains usable when the guest becomes active.
+var ErrDisplayInactive = errors.New("模拟器画面暂不可见")
+
+type FrameStream interface {
+	Next(dst *image.RGBA) (*image.RGBA, error)
+}
+
+// FrameStreamer uses ctx to stop the stream, including a blocked Next call.
+type FrameStreamer interface {
+	OpenFrameStream(ctx context.Context) (FrameStream, error)
+}
 
 type Session interface {
 	// Capture fills dst when its size matches. The caller must not provide a

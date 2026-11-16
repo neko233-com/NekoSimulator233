@@ -40,7 +40,11 @@ func (protoCodec) Marshal(v any) (mem.BufferSlice, error) {
 	return mem.BufferSlice{mem.SliceBuffer(*p)}, nil
 }
 
-type frameResponse struct{ frame *image.RGBA }
+type frameResponse struct {
+	frame      *image.RGBA
+	allowEmpty bool
+	empty      bool
+}
 
 func (protoCodec) Unmarshal(data mem.BufferSlice, v any) error {
 	switch p := v.(type) {

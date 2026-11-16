@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"image"
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +52,8 @@ type viewer struct {
 	events        chan pointerEvent
 	done          chan struct{}
 	once          sync.Once
+	streamMu      sync.Mutex
+	streamCancel  context.CancelFunc
 	hidden        atomic.Bool
 	minimized     atomic.Bool
 	bindings      map[uint16]mappedPoint
@@ -87,15 +92,23 @@ func openViewer(name string, source display.Session, bindingsPath string, onClos
 		}
 	})
 	v.win.OnBlur(v.releaseHostInput)
-	v.win.OnHide(func() { v.hidden.Store(true); v.releaseHostInput() })
+	v.win.OnHide(func() { v.hidden.Store(true); v.cancelStream(); v.releaseHostInput() })
 	v.win.OnShow(func() { v.hidden.Store(false) })
-	v.win.OnMinimize(func() { v.minimized.Store(true); v.releaseHostInput() })
+	v.win.OnMinimize(func() { v.minimized.Store(true); v.cancelStream(); v.releaseHostInput() })
 	v.win.OnRestore(func() { v.minimized.Store(false) })
 	go v.run()
 	return v
 }
 
-func (v *viewer) stop() { v.once.Do(func() { close(v.done) }) }
+func (v *viewer) stop() { v.once.Do(func() { close(v.done); v.cancelStream() }) }
+
+func (v *viewer) cancelStream() {
+	v.streamMu.Lock()
+	defer v.streamMu.Unlock()
+	if v.streamCancel != nil {
+		v.streamCancel()
+	}
+}
 
 func (v *viewer) run() {
 	inputDone := make(chan struct{})
@@ -118,6 +131,11 @@ func (v *viewer) run() {
 		<-inputDone
 		_ = v.source.Close()
 	}()
+	if source, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
+		if v.runStream(source) {
+			return
+		}
+	}
 	ticker := time.NewTicker(time.Second / 30)
 	defer ticker.Stop()
 	var frames [2]*image.RGBA
@@ -141,31 +159,148 @@ func (v *viewer) run() {
 				continue
 			}
 			frames[frameIndex] = frame
-			// Window.Update is asynchronous: acknowledge it before acquiring the
-			// next frame so a slow UI cannot queue unbounded full-size bitmaps.
-			ack := make(chan struct{})
-			v.win.Update(func() {
-				defer close(ack)
-				select {
-				case <-v.done:
-					return
-				default:
-				}
-				if v.bitmap == nil {
-					v.bitmap = ui.NewBitmap(frame)
-				} else {
-					v.bitmap.Update(frame)
-				}
-				v.setFrameSize(frame.Bounds().Dx(), frame.Bounds().Dy())
-				v.message = ""
-			})
-			select {
-			case <-ack:
-				frameIndex = 1 - frameIndex
-			case <-v.done:
+			if !v.presentFrame(frame) {
 				return
 			}
+			frameIndex = 1 - frameIndex
 		}
+	}
+}
+
+// presentFrame waits for the UI to accept the frame before reusing buffers.
+func (v *viewer) presentFrame(frame *image.RGBA) bool {
+	ack := make(chan struct{})
+	v.win.Update(func() {
+		defer close(ack)
+		select {
+		case <-v.done:
+			return
+		default:
+		}
+		if v.bitmap == nil {
+			v.bitmap = ui.NewBitmap(frame)
+		} else {
+			v.bitmap.Update(frame)
+		}
+		v.setFrameSize(frame.Bounds().Dx(), frame.Bounds().Dy())
+		v.message = ""
+	})
+	select {
+	case <-ack:
+		return true
+	case <-v.done:
+		return false
+	}
+}
+
+// runStream returns false on a stream failure, allowing the existing polling
+// transport to take over. Hidden/minimized windows cancel the stream.
+func (v *viewer) runStream(source display.FrameStreamer) bool {
+	var frames [2]*image.RGBA
+	index := 0
+	for {
+		select {
+		case <-v.done:
+			return true
+		default:
+		}
+		if v.hidden.Load() || v.minimized.Load() {
+			timer := time.NewTimer(200 * time.Millisecond)
+			select {
+			case <-v.done:
+				timer.Stop()
+				return true
+			case <-timer.C:
+			}
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		v.streamMu.Lock()
+		select {
+		case <-v.done:
+			v.streamMu.Unlock()
+			cancel()
+			return true
+		default:
+		}
+		if v.hidden.Load() || v.minimized.Load() {
+			v.streamMu.Unlock()
+			cancel()
+			continue
+		}
+		v.streamCancel = cancel
+		v.streamMu.Unlock()
+		var startTimedOut atomic.Bool
+		startTimer := time.AfterFunc(5*time.Second, func() { startTimedOut.Store(true); cancel() })
+		stream, err := source.OpenFrameStream(ctx)
+		for err == nil {
+			var frame *image.RGBA
+			frame, err = stream.Next(frames[index])
+			startTimer.Stop()
+			if ctx.Err() != nil {
+				break
+			}
+			if errors.Is(err, display.ErrDisplayInactive) {
+				if !v.presentInactive() {
+					cancel()
+					return true
+				}
+				err = nil
+				continue
+			}
+			if err != nil || ctx.Err() != nil {
+				break
+			}
+			frames[index] = frame
+			if !v.presentFrame(frame) {
+				cancel()
+				return true
+			}
+			index = 1 - index
+		}
+		v.streamMu.Lock()
+		v.streamCancel = nil
+		v.streamMu.Unlock()
+		startTimer.Stop()
+		interrupted := ctx.Err() != nil
+		cancel()
+		select {
+		case <-v.done:
+			return true
+		default:
+		}
+		if startTimedOut.Load() {
+			v.report(errors.New("画面流启动超时，已切换截图模式"))
+			return false
+		}
+		if interrupted || v.hidden.Load() || v.minimized.Load() {
+			continue
+		}
+		if err != nil {
+			v.report(err)
+		}
+		return false
+	}
+}
+
+func (v *viewer) presentInactive() bool {
+	ack := make(chan struct{})
+	v.win.Update(func() {
+		defer close(ack)
+		select {
+		case <-v.done:
+			return
+		default:
+		}
+		v.setFrameSize(0, 0)
+		v.bitmap = nil
+		v.message = display.ErrDisplayInactive.Error()
+	})
+	select {
+	case <-ack:
+		return true
+	case <-v.done:
+		return false
 	}
 }
 
