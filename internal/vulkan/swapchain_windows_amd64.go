@@ -58,6 +58,7 @@ var (
 	kernel32                 = windows.NewLazySystemDLL("kernel32.dll")
 	getWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
 	getClientRect            = user32.NewProc("GetClientRect")
+	isIconic                 = user32.NewProc("IsIconic")
 	getModuleHandle          = kernel32.NewProc("GetModuleHandleW")
 )
 
@@ -100,6 +101,9 @@ func windowSize(hwnd uintptr) (extent2D, error) {
 	thread, _, _ := getWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	if thread == 0 || pid != windows.GetCurrentProcessId() {
 		return extent2D{}, errors.New("窗口不存在或不属于当前进程")
+	}
+	if minimized, _, _ := isIconic.Call(hwnd); minimized != 0 {
+		return extent2D{}, errors.New("窗口已最小化")
 	}
 	var rect winRect
 	ok, _, err := getClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))

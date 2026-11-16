@@ -102,3 +102,33 @@ func TestBusyPresentationBlocksHostDestruction(t *testing.T) {
 		}
 	}
 }
+
+func TestPresentReportsSurfaceRebuildAfterSafeCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		acquire, present int32
+		want             error
+	}{
+		{"acquire_outdated", vkOutOfDate, 0, ErrSwapchainOutOfDate},
+		{"acquire_suboptimal", vkSuboptimal, 0, ErrSwapchainOutOfDate},
+		{"present_outdated", 0, vkOutOfDate, ErrSwapchainOutOfDate},
+		{"present_suboptimal", 0, vkSuboptimal, ErrSwapchainOutOfDate},
+		{"present_surface_lost", 0, vkSurfaceLost, ErrSurfaceLost},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver := &mockFrameDriver{}
+			p := driver.procs()
+			p.acquire = windows.NewCallback(func(_, _, _, _, _ uintptr, index *uint32) uintptr { *index = 0; return uintptr(uint32(tc.acquire)) })
+			p.present = windows.NewCallback(func(_ uintptr, _ *presentInfo) uintptr { return uintptr(uint32(tc.present)) })
+			h := &Host{device: 1, queue: 2, info: DeviceInfo{PresentFence: true}}
+			s := &Swapchain{host: h, swapchain: 3, images: []uint64{4}}
+			hooks := frameHooks{record: func(*Host, *presentResources, uintptr, uint64, *imageSubresourceRange) (uint32, uint32, error) {
+				return vkLayoutTransferDst, vkAccessTransferWrite, nil
+			}}
+			err := s.presentFrameWith(hooks, func(*Host) (presentProcs, error) { return p, nil })
+			if !errors.Is(err, tc.want) || !s.poisoned || s.pending != nil {
+				t.Fatalf("rebuild status %v", err)
+			}
+		})
+	}
+}

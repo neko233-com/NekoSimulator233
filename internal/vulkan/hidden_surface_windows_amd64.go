@@ -3,6 +3,7 @@
 package vulkan
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"runtime"
@@ -50,11 +51,11 @@ func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.R
 			destroyWindow.Call(hwnd)
 		}
 	}()
-	s, err := h.CreateSwapchain(hwnd)
+	s := NewWindowRenderer(h, hwnd)
+	info, err := s.Ensure()
 	if err != nil {
 		return SwapchainInfo{}, err
 	}
-	info := s.Info()
 	if present {
 		if err := s.PresentClear([4]float32{1, 0.25, 0.5, 1}); err != nil {
 			if closeErr := s.Close(); closeErr != nil {
@@ -66,8 +67,19 @@ func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.R
 		info.ClearSubmitted = true
 	}
 	if frame != nil {
+		info, err = s.Ensure()
+		if err != nil {
+			if closeErr := s.Close(); closeErr != nil {
+				destroy = false
+				return SwapchainInfo{}, errors.Join(err, closeErr)
+			}
+			return SwapchainInfo{}, err
+		}
 		if int(info.Width) != width || int(info.Height) != height {
-			_ = s.Close()
+			if closeErr := s.Close(); closeErr != nil {
+				destroy = false
+				return SwapchainInfo{}, closeErr
+			}
 			return SwapchainInfo{}, fmt.Errorf("测试窗口尺寸异常：%dx%d", info.Width, info.Height)
 		}
 		var err error
@@ -83,8 +95,23 @@ func inspectHiddenFrame(h *Host, width, height int, present bool, frame *image.R
 			}
 			return SwapchainInfo{}, err
 		}
-		info.PixelsVerified = true
 	}
+	info, err = s.Info()
+	if err != nil {
+		if closeErr := s.Close(); closeErr != nil {
+			destroy = false
+			return SwapchainInfo{}, errors.Join(err, closeErr)
+		}
+		return SwapchainInfo{}, err
+	}
+	if frame != nil && (int(info.Width) != width || int(info.Height) != height) {
+		if closeErr := s.Close(); closeErr != nil {
+			destroy = false
+			return SwapchainInfo{}, closeErr
+		}
+		return SwapchainInfo{}, fmt.Errorf("测试窗口尺寸异常：%dx%d", info.Width, info.Height)
+	}
+	info.ClearSubmitted, info.PixelsVerified = present, frame != nil
 	if err := s.Close(); err != nil {
 		destroy = false
 		return SwapchainInfo{}, err

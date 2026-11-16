@@ -30,6 +30,19 @@ const (
 )
 
 var ErrPresentBusy = errors.New("Vulkan 图像仍在使用，资源未释放；请稍后重试")
+var ErrSwapchainOutOfDate = errors.New("Vulkan 交换链需要重建")
+var ErrSurfaceLost = errors.New("Vulkan 窗口表面已失效")
+
+func swapchainResult(name string, value int32) error {
+	switch value {
+	case vkOutOfDate, vkSuboptimal:
+		return fmt.Errorf("%s：%w (VkResult %d)", name, ErrSwapchainOutOfDate, value)
+	case vkSurfaceLost, vkFullscreenLost:
+		return fmt.Errorf("%s：%w (VkResult %d)", name, ErrSurfaceLost, value)
+	default:
+		return fmt.Errorf("%s 失败：VkResult %d", name, value)
+	}
+}
 
 type fenceCreateInfo struct {
 	SType uint32
@@ -349,8 +362,9 @@ func (s *Swapchain) presentFrameWith(hooks frameHooks, resolve func(*Host) (pres
 		return e
 	}
 	if int32(r) != vkSuccess && int32(r) != vkSuboptimal {
-		return result("vkAcquireNextImageKHR", r)
+		return swapchainResult("vkAcquireNextImageKHR", int32(r))
 	}
+	suboptimal := int32(r) == vkSuboptimal
 	op.acquirePending = true
 	if err = waitFence(p, h.device, &op.acquireFence); err != nil {
 		return err
@@ -435,8 +449,11 @@ func (s *Swapchain) presentFrameWith(hooks frameHooks, resolve func(*Host) (pres
 		}
 		op.presentPending = false
 	}
-	if presentResult != vkSuccess && presentResult != vkSuboptimal {
-		return fmt.Errorf("vkQueuePresentKHR 失败：VkResult %d", presentResult)
+	if presentResult != vkSuccess {
+		return swapchainResult("vkQueuePresentKHR", presentResult)
+	}
+	if suboptimal {
+		return swapchainResult("vkAcquireNextImageKHR", vkSuboptimal)
 	}
 	return nil
 }

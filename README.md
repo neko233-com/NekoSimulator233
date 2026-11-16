@@ -51,6 +51,8 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 
 `neko_host_vulkan` 会短暂创建并销毁宿主 Vulkan 图形设备，报告设备、图形队列及驱动声明的交换链和 Win32 外部资源扩展；传入 `{"test_surface":true}` 时还会创建并销毁 64×64 隐藏测试窗口和交换链。传入 `{"test_present":true}` 时会在独立子进程向隐藏交换链提交纯色画面；传入 `{"test_pixels":true}` 还会上传图案并从 GPU 图像回读比对。呈现测试需要驱动支持交换链维护扩展，像素测试还需要交换链支持回读。查询不启动 Android 实例，也不证明屏幕上实际显示了像素或外部资源互操作可用。实验像素路径复用成功帧的资源，但每帧仍同步等待，尚未完成真实多帧和游戏性能验证。源码目录中可用 `go run ./cmd/vulkan-host-probe -pixels` 独立执行像素测试。
 
+实验 Vulkan 窗口呈现器能在窗口尺寸变化或交换链失效时重建资源；GPU 仍在使用资源时会保留资源并报告忙碌。该恢复路径已通过模拟驱动测试，尚未完成真实窗口缩放、最小化和 GPU 故障测试。
+
 MCP 默认选择 `NekoSimulator233` 实例；使用 `neko_create_instance` 创建，参数 `api` 可选 30、34 或 35，省略时按默认策略选择 35 或 34。使用 `neko_select_instance` 选择后，其他操作针对所选实例。选择状态属于 MCP 服务进程，连接同一进程的客户端会共享该选择；可为需要隔离选择状态的客户端分别启动服务进程。
 
 为减少连续截图和触控的检查开销，这些操作最多在两秒内复用一次已验证的 Android/Vulkan 状态，每次仍检查实例发现信息和控制端点；显式状态查询及 ADB 操作每次完整检查。若 Android 在此期间重启，短时内仍可能尝试访问尚未就绪的画面，实际调用失败会返回错误。
