@@ -16,9 +16,10 @@ import (
 )
 
 type Service struct {
-	Manager  func() (avd.Manager, error)
-	mu       sync.Mutex
-	selected string
+	Manager          func() (avd.Manager, error)
+	mu               sync.Mutex
+	selected         string
+	controlReadiness avd.ControlReadiness
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -245,7 +246,7 @@ func (s *Service) setResources(ctx context.Context, _ *mcp.CallToolRequest, reso
 }
 
 func (s *Service) screen(ctx context.Context) (*avd.Controller, int, int, error) {
-	_, i, err := s.ready(ctx)
+	i, err := s.readyControl(ctx)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -260,10 +261,22 @@ func (s *Service) screen(ctx context.Context) (*avd.Controller, int, int, error)
 	}
 	return c, frame.Bounds().Dx(), frame.Bounds().Dy(), nil
 }
+
+// readyControl is only used for gRPC screen and input operations; ADB-backed
+// actions and explicit status checks continue to inspect the guest every time.
+func (s *Service) readyControl(ctx context.Context) (avd.Instance, error) {
+	m, err := s.manager()
+	if err != nil {
+		return avd.Instance{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	return s.controlReadiness.Ready(ctx, m)
+}
 func (s *Service) screenshot(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, i, err := s.ready(ctx)
+	i, err := s.readyControl(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -466,7 +479,7 @@ func (s *Service) holdKey(ctx context.Context, _ *mcp.CallToolRequest, p HoldKey
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, i, err := s.ready(ctx)
+	i, err := s.readyControl(ctx)
 	if err != nil {
 		return nil, Result{}, err
 	}

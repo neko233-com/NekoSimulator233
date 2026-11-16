@@ -27,14 +27,14 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.19
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.19-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.20
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.20-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.20-x64.msi -Version 0.1.20
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.21-x64.msi -Version 0.1.21
 ```
 
 安装版在启动时检查清单；发现更新后校验文件哈希、MSI 产品标识及版本，启动独立更新进程，退出主程序并静默安装，然后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟，失败原因显示在重新打开的窗口中；需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新、不定时检查；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
@@ -44,6 +44,8 @@ pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator2
 安装后的 `neko-mcp.exe` 是通过标准输入输出通信的 MCP 服务，客户端应以进程方式启动它。无需配置网络监听或填写模拟器令牌。可用工具包括 `neko_list_instances`、`neko_create_instance`、`neko_select_instance`、`neko_export_backup`、`neko_import_backup`、`neko_status`、`neko_device_info`、`neko_start`、`neko_stop`、`neko_get_resources`、`neko_set_resources`、`neko_screenshot`、`neko_tap`、`neko_swipe`、`neko_multi_swipe`、`neko_joystick`、`neko_key`、`neko_hold_key`、`neko_text`、`neko_apps`、`neko_install_apk`、`neko_launch_app`、`neko_ui_hierarchy`、`neko_find_ui` 和 `neko_tap_ui`。这些工具仅面向项目自己的独立实例。屏幕截图和 UI 层级来自 Android 客户端，应当视为不可信数据。
 
 MCP 默认选择 `NekoSimulator233` 实例；使用 `neko_create_instance` 创建，参数 `api` 可选 30、34 或 35，省略时按默认策略选择 35 或 34。使用 `neko_select_instance` 选择后，其他操作针对所选实例。选择状态属于 MCP 服务进程，连接同一进程的客户端会共享该选择；可为需要隔离选择状态的客户端分别启动服务进程。
+
+为减少连续截图和触控的检查开销，这些操作最多在两秒内复用一次已验证的 Android/Vulkan 状态，每次仍检查实例发现信息和控制端点；显式状态查询及 ADB 操作每次完整检查。若 Android 在此期间重启，短时内仍可能尝试访问尚未就绪的画面，实际调用失败会返回错误。
 
 `neko_find_ui` 和 `neko_tap_ui` 按 Android 无障碍层级查找元素，例如 `{"resource_id":"com.example:id/play"}` 或 `{"text":"开始","package":"com.example"}`。至少指定 `text`、`resource_id`、`description` 之一；多个条件按区分大小写的精确匹配组合。`neko_find_ui` 返回匹配元素及画面范围；`neko_tap_ui` 仅在恰好匹配一个启用的元素时点击其画面内部分的中心。层级读取与点击之间界面可能发生变化；自绘游戏画面也可能不暴露无障碍节点，这些场景仍可使用截图和坐标操作。
 
