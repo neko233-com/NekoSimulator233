@@ -43,23 +43,18 @@ func (protoCodec) Marshal(v any) (mem.BufferSlice, error) {
 type frameResponse struct{ frame *image.RGBA }
 
 func (protoCodec) Unmarshal(data mem.BufferSlice, v any) error {
-	buffer := data.MaterializeToBuffer(mem.DefaultBufferPool())
-	defer buffer.Free()
 	switch p := v.(type) {
 	case *rawProto:
-		*p = append((*p)[:0], buffer.ReadOnlyData()...)
+		size := data.Len()
+		if cap(*p) < size {
+			*p = make(rawProto, size)
+		} else {
+			*p = (*p)[:size]
+		}
+		data.CopyTo(*p)
 		return nil
 	case *frameResponse:
-		w, h, pixels, err := parseImage(buffer.ReadOnlyData())
-		if err != nil {
-			return err
-		}
-		rect := image.Rect(0, 0, w, h)
-		if p.frame == nil || p.frame.Rect != rect || p.frame.Stride != w*4 || len(p.frame.Pix) < len(pixels) {
-			p.frame = image.NewRGBA(rect)
-		}
-		copy(p.frame.Pix, pixels)
-		return nil
+		return decodeFragmentedFrame(data, p)
 	default:
 		return errors.New("invalid protobuf response")
 	}
