@@ -69,7 +69,7 @@ func TestLiveMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 19 {
+	if len(list.Tools) != 22 {
 		t.Fatalf("got %d tools", len(list.Tools))
 	}
 	call := func(name string, args any) *mcp.CallToolResult {

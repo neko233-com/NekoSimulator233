@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
+	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
 	"golang.org/x/sys/windows"
 )
@@ -37,6 +39,13 @@ func joystickKey(k uint16) bool { return k == 0x1a || k == 0x04 || k == 0x16 || 
 
 func keymapPath() string {
 	return filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "keymap.json")
+}
+
+func keymapPathForInstance(name string) string {
+	if strings.EqualFold(name, avd.DefaultName) {
+		return keymapPath()
+	}
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "keymaps", strings.ToLower(name)+".json")
 }
 
 func (s *keymapStore) read() (map[uint16]mappedPoint, error) {

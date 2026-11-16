@@ -16,8 +16,9 @@ import (
 )
 
 type Service struct {
-	Manager func() (avd.Manager, error)
-	mu      sync.Mutex
+	Manager  func() (avd.Manager, error)
+	mu       sync.Mutex
+	selected string
 }
 
 // Version is set by the MSI build so MCP clients see the installed version.
@@ -26,6 +27,7 @@ var Version = "0.0.0"
 type Empty struct{}
 type State struct {
 	Ready           bool   `json:"ready"`
+	Name            string `json:"name,omitempty"`
 	Reason          string `json:"reason,omitempty"`
 	Serial          string `json:"serial,omitempty"`
 	VulkanGPU       string `json:"vulkan_gpu,omitempty"`
@@ -94,6 +96,13 @@ type UITapResult struct {
 	X  int  `json:"x"`
 	Y  int  `json:"y"`
 }
+type InstanceName struct {
+	Name string `json:"name" jsonschema:"Project-owned instance name"`
+}
+type InstanceList struct {
+	Instances []avd.InstanceSummary `json:"instances"`
+	Selected  string                `json:"selected"`
+}
 
 func New(manager func() (avd.Manager, error)) *mcp.Server {
 	s := &Service{Manager: manager}
@@ -103,6 +112,9 @@ func New(manager func() (avd.Manager, error)) *mcp.Server {
 	}
 	rw := func(name, desc string) *mcp.Tool { return &mcp.Tool{Name: name, Description: desc} }
 	mcp.AddTool(server, ro("neko_status", "Inspect the Neko-owned Android instance and its hardware Vulkan device; never starts it."), s.status)
+	mcp.AddTool(server, ro("neko_list_instances", "List project-owned independent instances and their observed process state."), s.listInstances)
+	mcp.AddTool(server, rw("neko_create_instance", "Create a new independent instance without overwriting existing data; does not start it."), s.createInstance)
+	mcp.AddTool(server, rw("neko_select_instance", "Select an existing independent instance for subsequent tools in this MCP server process."), s.selectInstance)
 	mcp.AddTool(server, rw("neko_start", "Start or attach to the Neko-owned Android instance and wait for Android and hardware Vulkan readiness."), s.start)
 	mcp.AddTool(server, rw("neko_stop", "Shut down only the Neko-owned Android instance; preserve its data."), s.stop)
 	mcp.AddTool(server, ro("neko_get_resources", "Read the configured virtual CPU cores and guest RAM for the Neko-owned instance."), s.getResources)
@@ -124,8 +136,17 @@ func New(manager func() (avd.Manager, error)) *mcp.Server {
 	return server
 }
 
-func (s *Service) ready(ctx context.Context) (avd.Manager, avd.Instance, error) {
+// manager is called while s.mu is held so a request uses one stable selection.
+func (s *Service) manager() (avd.Manager, error) {
 	m, err := s.Manager()
+	if err != nil || s.selected == "" {
+		return m, err
+	}
+	return m.WithName(s.selected)
+}
+
+func (s *Service) ready(ctx context.Context) (avd.Manager, avd.Instance, error) {
+	m, err := s.manager()
 	if err != nil {
 		return m, avd.Instance{}, err
 	}
@@ -135,7 +156,7 @@ func (s *Service) ready(ctx context.Context) (avd.Manager, avd.Instance, error) 
 	return m, instance, err
 }
 func state(i avd.Instance) State {
-	return State{Ready: true, Serial: i.Serial, VulkanGPU: i.VulkanDevice, KeyboardEnabled: i.KeyboardEnabled}
+	return State{Ready: true, Name: i.Name, Serial: i.Serial, VulkanGPU: i.VulkanDevice, KeyboardEnabled: i.KeyboardEnabled}
 }
 func (s *Service) status(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, State, error) {
 	s.mu.Lock()
@@ -149,7 +170,7 @@ func (s *Service) status(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (
 func (s *Service) start(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, err := s.Manager()
+	m, err := s.manager()
 	if err != nil {
 		return nil, State{}, err
 	}
@@ -164,7 +185,7 @@ func (s *Service) start(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*
 func (s *Service) stop(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, err := s.Manager()
+	m, err := s.manager()
 	if err != nil {
 		return nil, Result{}, err
 	}
@@ -177,7 +198,7 @@ func (s *Service) stop(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*m
 func (s *Service) getResources(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, avd.Resources, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, err := s.Manager()
+	m, err := s.manager()
 	if err != nil {
 		return nil, avd.Resources{}, err
 	}
@@ -188,7 +209,7 @@ func (s *Service) getResources(ctx context.Context, _ *mcp.CallToolRequest, _ Em
 func (s *Service) setResources(ctx context.Context, _ *mcp.CallToolRequest, resources avd.Resources) (*mcp.CallToolResult, Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, err := s.Manager()
+	m, err := s.manager()
 	if err != nil {
 		return nil, Result{}, err
 	}

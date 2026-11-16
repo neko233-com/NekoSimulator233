@@ -27,14 +27,36 @@ type app struct {
 	message       string
 	updateMessage string
 	viewers       map[string]*viewer
-	resources     *resourceSettings
+	resources     map[string]*resourceSettings
+	selected      string
+	available     []avd.InstanceSummary
+	newInstance   string
+}
+
+func (a *app) selectedName() string {
+	if a.selected == "" {
+		return avd.DefaultName
+	}
+	return a.selected
+}
+
+func independentViewerKey(name string) string { return "independent:" + strings.ToLower(name) }
+
+func selectedManager(name string) (avd.Manager, error) {
+	m, err := avd.DiscoverManager()
+	if err != nil {
+		return m, err
+	}
+	return m.WithName(name)
 }
 
 func (a *app) startIndependent() {
 	if a.busy {
 		return
 	}
-	if v := a.viewers["independent"]; v != nil {
+	name := a.selectedName()
+	key := independentViewerKey(name)
+	if v := a.viewers[key]; v != nil {
 		v.win.Show()
 		v.win.Focus()
 		return
@@ -42,7 +64,7 @@ func (a *app) startIndependent() {
 	a.busy = true
 	a.message = "正在启动独立 Android 实例并验证 Vulkan…"
 	go func() {
-		manager, err := avd.DiscoverManager()
+		manager, err := selectedManager(name)
 		var instance avd.Instance
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -60,13 +82,14 @@ func (a *app) startIndependent() {
 				return
 			}
 			a.message = fmt.Sprintf("独立实例已启动 · Vulkan: %s", instance.VulkanDevice)
+			a.markInstanceState(name, "running")
 			if !instance.KeyboardEnabled {
 				a.message += " · 键盘未启用，请关闭后重新启动实例"
 			}
 			if a.viewers == nil {
 				a.viewers = make(map[string]*viewer)
 			}
-			a.viewers["independent"] = openViewer("NekoSimulator233", source, func() { delete(a.viewers, "independent") })
+			a.viewers[key] = openViewer(name, source, keymapPathForInstance(name), func() { delete(a.viewers, key) })
 		})
 	}()
 }
@@ -75,13 +98,15 @@ func (a *app) stopIndependent() {
 	if a.busy {
 		return
 	}
-	if v := a.viewers["independent"]; v != nil {
+	name := a.selectedName()
+	key := independentViewerKey(name)
+	if v := a.viewers[key]; v != nil {
 		v.win.Close()
 	}
 	a.busy = true
 	a.message = "正在关闭独立实例…"
 	go func() {
-		manager, err := avd.DiscoverManager()
+		manager, err := selectedManager(name)
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			err = manager.Stop(ctx)
@@ -93,6 +118,7 @@ func (a *app) stopIndependent() {
 				a.message = err.Error()
 			} else {
 				a.message = "独立实例已关闭，数据已保留"
+				a.markInstanceState(name, "stopped")
 			}
 		})
 	}()
@@ -107,13 +133,14 @@ func (a *app) chooseAPK(replace bool) {
 	a.busy = true
 	a.message = "请选择要安装到独立实例的 APK…"
 	parent := a.window
+	name := a.selectedName()
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent: parent, Title: "选择 Android APK", Filters: []mygo.FileFilter{{Name: "Android APK", Extensions: []string{"apk"}}},
 		})
 		if err == nil && len(paths) != 0 {
 			parent.Update(func() { a.message = "正在安装 APK，请稍候…" })
-			manager, discoverErr := avd.DiscoverManager()
+			manager, discoverErr := selectedManager(name)
 			err = discoverErr
 			if err == nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -150,6 +177,13 @@ func (a *app) refresh() {
 	a.busy = true
 	a.message = "正在读取 MuMu 实例…"
 	go func() {
+		manager, independentErr := avd.DiscoverManager()
+		var available []avd.InstanceSummary
+		if independentErr == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			available, independentErr = manager.ListInstances(ctx)
+			cancel()
+		}
 		root, err := mumu.Discover()
 		var client mumu.Client
 		var instances []mumu.Instance
@@ -161,12 +195,21 @@ func (a *app) refresh() {
 		}
 		a.window.Update(func() {
 			a.busy = false
+			if independentErr == nil {
+				a.setAvailable(available)
+			}
 			if err != nil {
-				a.message = err.Error()
+				a.message = "MuMu：" + err.Error()
+				if independentErr != nil {
+					a.message += "；独立实例：" + independentErr.Error()
+				}
 				return
 			}
 			a.client, a.root, a.instances = client, root, instances
 			a.message = fmt.Sprintf("已连接 MuMu · %d 个实例", len(instances))
+			if independentErr != nil {
+				a.message += "；独立实例：" + independentErr.Error()
+			}
 		})
 	}()
 }
@@ -175,7 +218,8 @@ func (a *app) open(instance mumu.Instance) {
 	if a.busy {
 		return
 	}
-	if v := a.viewers[instance.Index]; v != nil {
+	key := "mumu:" + instance.Index
+	if v := a.viewers[key]; v != nil {
 		v.win.Show()
 		v.win.Focus()
 		return
@@ -206,7 +250,7 @@ func (a *app) open(instance mumu.Instance) {
 				if a.viewers == nil {
 					a.viewers = make(map[string]*viewer)
 				}
-				a.viewers[instance.Index] = openViewer(instance.Name, renderer, func() { delete(a.viewers, instance.Index) })
+				a.viewers[key] = openViewer(instance.Name, renderer, "", func() { delete(a.viewers, key) })
 			}
 		})
 	}()
@@ -214,10 +258,28 @@ func (a *app) open(instance mumu.Instance) {
 
 func (a *app) view(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Padding(28).Gap(16).Children(func() {
+	ui.Scroll(c).Fill().Padding(28).Gap(12).Children(func() {
 		ui.Text(c, "NekoSimulator233").FontSize(26).Bold()
 		ui.Text(c, "Android 模拟器").FontSize(15).TextColor(t.TextMuted)
 		ui.Text(c, a.message).FontSize(13)
+		if a.selected == "" {
+			a.selected = avd.DefaultName
+		}
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Select(c.Key("independent-select"), &a.selected, a.instanceChoices()).Label("独立实例").Disabled(a.busy)
+			ui.TextInput(c.Key("new-instance"), &a.newInstance).Placeholder("新实例名称（英文或数字）").Width(220).Disabled(a.busy)
+			if ui.Button(c.Key("create-instance"), "新建实例").Disabled(a.busy).Clicked() {
+				a.createIndependent()
+			}
+		})
+		if status := a.selectedStatus(); status != "" {
+			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+		}
+		for _, item := range a.available {
+			if item.State == "unknown" {
+				ui.Text(c, fmt.Sprintf("%s：%s", item.Name, item.Reason)).FontSize(12).TextColor(t.TextMuted)
+			}
+		}
 		if ui.PrimaryButton(c.Key("independent"), "启动独立模拟器（Vulkan）").Disabled(a.busy).Clicked() {
 			a.startIndependent()
 		}

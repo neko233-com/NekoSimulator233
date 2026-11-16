@@ -23,15 +23,17 @@ func (a *app) openResources() {
 	if a.busy {
 		return
 	}
-	if a.resources != nil {
-		a.resources.win.Show()
-		a.resources.win.Focus()
+	name := a.selectedName()
+	key := independentViewerKey(name)
+	if existing := a.resources[key]; existing != nil {
+		existing.win.Show()
+		existing.win.Focus()
 		return
 	}
 	a.busy = true
 	a.message = "正在读取独立实例资源设置…"
 	go func() {
-		manager, err := avd.DiscoverManager()
+		manager, err := selectedManager(name)
 		var values avd.Resources
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -46,9 +48,12 @@ func (a *app) openResources() {
 			}
 			a.message = ""
 			s := &resourceSettings{manager: manager, cores: float64(values.Cores), ram: float64(values.RAMMiB)}
-			s.win = mygo.NewWindow(mygo.WindowOptions{Title: "独立实例资源设置", Width: 500, Height: 300, Content: ui.View(s.view)})
-			a.resources = s
-			s.win.OnClosed(func() { a.resources = nil })
+			s.win = mygo.NewWindow(mygo.WindowOptions{Title: "资源设置 - " + name, Width: 500, Height: 300, Content: ui.View(s.view)})
+			if a.resources == nil {
+				a.resources = make(map[string]*resourceSettings)
+			}
+			a.resources[key] = s
+			s.win.OnClosed(func() { delete(a.resources, key) })
 		})
 	}()
 }

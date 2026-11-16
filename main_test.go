@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 )
 
@@ -14,6 +15,39 @@ func TestInstanceView(t *testing.T) {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
+	}
+}
+
+func TestIndependentInstanceChoicesAndKeymaps(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	if keymapPathForInstance(avd.DefaultName) != keymapPath() {
+		t.Fatal("default instance no longer uses the existing keymap")
+	}
+	if keymapPathForInstance("Alpha") == keymapPath() || keymapPathForInstance("Alpha") == keymapPathForInstance("Beta") || keymapPathForInstance("Alpha") != keymapPathForInstance("alpha") {
+		t.Fatal("instance keymap paths are not isolated")
+	}
+	a := &app{selected: "Alpha"}
+	a.setAvailable([]avd.InstanceSummary{{Name: avd.DefaultName, State: "not_created"}, {Name: "Alpha", State: "stopped"}, {Name: "Incomplete", State: "unknown"}})
+	if a.selectedName() != "Alpha" || len(a.instanceChoices()) != 2 {
+		t.Fatalf("incorrect choices: %+v", a.instanceChoices())
+	}
+	a.setAvailable([]avd.InstanceSummary{{Name: avd.DefaultName, State: "not_created"}})
+	if a.selectedName() != avd.DefaultName {
+		t.Fatal("missing selection was not reset")
+	}
+}
+
+func TestIndependentInstanceSelectionInView(t *testing.T) {
+	a := &app{selected: avd.DefaultName, available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped"}, {Name: "Alpha", State: "stopped"}}}
+	tester := ui.NewTester(a.view, 760, 600)
+	if err := tester.Click("独立实例"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if a.selectedName() != "Alpha" {
+		t.Fatalf("selection = %q", a.selectedName())
 	}
 }
 

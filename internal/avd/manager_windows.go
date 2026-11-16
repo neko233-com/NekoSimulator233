@@ -25,7 +25,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const defaultName = "NekoSimulator233"
+const DefaultName = "NekoSimulator233"
+const defaultName = DefaultName
 
 type Manager struct{ SDK, Home, Name string }
 type Instance struct {
@@ -97,15 +98,8 @@ func (m Manager) Ensure() error {
 	ini := filepath.Join(home, m.Name+".ini")
 	config := filepath.Join(dir, "config.ini")
 	if exists(ini) && exists(config) {
-		values, err := parseINI(ini)
-		if err != nil {
-			return fmt.Errorf("读取实例索引失败：%w", err)
-		}
-		indexed, err := filepath.Abs(values["path"])
-		if err != nil || !strings.EqualFold(filepath.Clean(indexed), filepath.Clean(dir)) {
-			return errors.New("实例索引指向其他位置，已保留现有数据")
-		}
-		return nil
+		_, err := ownedAVD(m)
+		return err
 	}
 	if exists(ini) || exists(config) {
 		return errors.New("实例配置不完整，已保留现有数据；请检查 AVD 目录")

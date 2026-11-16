@@ -59,10 +59,10 @@ type viewer struct {
 	mappingError  string
 }
 
-func openViewer(name string, source display.Session, onClosed func()) *viewer {
+func openViewer(name string, source display.Session, bindingsPath string, onClosed func()) *viewer {
 	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), message: "正在读取画面…"}
 	if _, ok := source.(display.MultiTouch); ok {
-		v.keymap = &keymapStore{path: keymapPath()}
+		v.keymap = &keymapStore{path: bindingsPath}
 		var err error
 		v.bindings, err = v.keymap.read()
 		v.joystick = v.keymap.joystick

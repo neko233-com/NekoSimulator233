@@ -303,7 +303,21 @@ func ownedAVD(m Manager) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ini, err := parseINI(filepath.Join(m.Home, m.Name+".ini"))
+	iniPath := filepath.Join(m.Home, m.Name+".ini")
+	for _, check := range []struct {
+		path string
+		dir  bool
+	}{{dir, true}, {iniPath, false}, {filepath.Join(dir, "config.ini"), false}} {
+		p, err := windows.UTF16PtrFromString(check.path)
+		if err != nil {
+			return "", err
+		}
+		attrs, err := windows.GetFileAttributes(p)
+		if err != nil || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || (attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0) != check.dir {
+			return "", errors.New("实例路径缺失、类型无效或包含链接，已保留文件")
+		}
+	}
+	ini, err := parseINI(iniPath)
 	if err != nil {
 		return "", errors.New("未找到完整的项目实例")
 	}
