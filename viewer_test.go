@@ -47,6 +47,61 @@ func TestPreviewMouseMappingAndRelease(t *testing.T) {
 	}
 }
 
+func TestPreviewKeysShareMappingsAndReleaseOnlyTheirOwner(t *testing.T) {
+	v := &viewer{width: 100, height: 200, events: make(chan pointerEvent, 16), done: make(chan struct{}), bindings: map[uint16]mappedPoint{0x04: {X: 0.5, Y: 0.5}}}
+	v.handleHostKey(0x06, true) // main window owns C
+	if e := <-v.events; e.kind != keyDown || e.usage != 0x06 {
+		t.Fatalf("main down: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	if e := <-v.events; e.kind != mappedDown || e.usage != 0x04 || e.x != 50 || e.y != 100 {
+		t.Fatalf("mapped down: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x04})
+	if len(v.events) != 0 {
+		t.Fatal("repeat sent twice")
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x05})
+	if e := <-v.events; e.kind != keyDown || e.usage != 0x05 {
+		t.Fatalf("preview down: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "release"})
+	got := map[int]bool{}
+	for range 2 {
+		e := <-v.events
+		got[e.kind] = true
+	}
+	if !got[mappedUp] || !got[keyUp] || !v.keys[0x06] || len(v.previewKeys) != 0 {
+		t.Fatalf("release mismatch: %+v", v.keys)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_up", Usage: 0x06})
+	if len(v.events) != 0 || !v.keys[0x06] {
+		t.Fatal("preview released main-window key")
+	}
+}
+
+func TestPreviewJoystickAndResizeRelease(t *testing.T) {
+	v := &viewer{width: 100, height: 100, events: make(chan pointerEvent, 8), done: make(chan struct{}), joystick: &joystickConfig{Center: mappedPoint{X: 0.5, Y: 0.5}, Radius: 0.1}}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x1a})
+	if e := <-v.events; e.kind != stickDown || e.usage != 0x1a {
+		t.Fatalf("stick down: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "release"})
+	if e := <-v.events; e.kind != stickUp || e.usage != 0x1a {
+		t.Fatalf("stick up: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "key_down", Usage: 0x1a})
+	<-v.events
+	v.setFrameSize(200, 100)
+	if e := <-v.events; e.kind != releaseKeys || len(v.previewKeys) != 0 || len(v.keys) != 0 {
+		t.Fatalf("resize release: %+v", e)
+	}
+	v.applyPreviewInput(previewinput.Event{Kind: "release"})
+	if len(v.events) != 0 {
+		t.Fatal("duplicate release")
+	}
+}
+
 type slowCaptureSession struct {
 	capturing chan struct{}
 	unblock   chan struct{}

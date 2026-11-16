@@ -81,6 +81,15 @@ func RunPreview(input io.Reader, output io.Writer) (err error) {
 			return 0
 		case 0x0008: // WM_KILLFOCUS
 			emit(previewinput.Event{Kind: "release"})
+		case 0x0100, 0x0101, 0x0104, 0x0105: // WM_KEY* and WM_SYSKEY*
+			event, ok := previewinput.KeyMessage(msg, wp, lp)
+			if !ok {
+				break
+			}
+			emit(event)
+			return 0
+		case 0x0106: // WM_SYSCHAR: physical key events were handled above
+			return 0
 		case 0x0215: // WM_CAPTURECHANGED
 			emit(previewinput.Event{Kind: "up"})
 		case 0x0202: // WM_LBUTTONUP

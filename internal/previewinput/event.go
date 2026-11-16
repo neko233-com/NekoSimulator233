@@ -10,9 +10,13 @@ type Event struct {
 	Height      int    `json:"height,omitempty"`
 	FrameWidth  int    `json:"frame_width,omitempty"`
 	FrameHeight int    `json:"frame_height,omitempty"`
+	Usage       uint16 `json:"usage,omitempty"`
 }
 
 func (e Event) Valid() bool {
+	if e.Kind == "key_down" || e.Kind == "key_up" {
+		return e.Usage >= 0x04 && e.Usage <= 0xa4 || e.Usage >= 0xe0 && e.Usage <= 0xe7
+	}
 	if e.Kind == "release" || e.Kind == "up" {
 		return true
 	}

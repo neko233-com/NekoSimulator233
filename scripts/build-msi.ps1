@@ -9,6 +9,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Go build failed.' }
     go build -trimpath -ldflags "-s -w -X github.com/neko233-com/NekoSimulator233/internal/agent.Version=$Version" -o (Join-Path $build 'neko-mcp.exe') ./cmd/neko-mcp
     if ($LASTEXITCODE -ne 0) { throw 'MCP server build failed.' }
-    wix build (Join-Path $root 'installer/NekoSimulator233.wxs') -arch x64 -d "Version=$Version" -d "Exe=$(Join-Path $build 'NekoSimulator233.exe')" -d "McpExe=$(Join-Path $build 'neko-mcp.exe')" -out (Join-Path $build "NekoSimulator233-$Version-x64.msi")
+    wix build (Join-Path $root 'installer/NekoSimulator233.wxs') -arch x64 -d "Version=$Version" -d "Exe=$(Join-Path $build 'NekoSimulator233.exe')" -d "McpExe=$(Join-Path $build 'neko-mcp.exe')" -d "MyGoLicense=$(Join-Path $root 'third_party/mygo/LICENSE')" -out (Join-Path $build "NekoSimulator233-$Version-x64.msi")
     if ($LASTEXITCODE -ne 0) { throw 'MSI build failed.' }
 } finally { Pop-Location }

@@ -51,6 +51,7 @@ type viewer struct {
 	preview       *vulkanPreview
 	held          bool
 	previewHeld   bool
+	previewKeys   map[uint16]bool
 	keys          map[uint16]bool
 	screen        ui.Handle
 	events        chan pointerEvent
@@ -451,6 +452,7 @@ func (v *viewer) enqueue(e pointerEvent) {
 }
 
 func (v *viewer) releaseHostKeys() {
+	clear(v.previewKeys)
 	if len(v.keys) == 0 {
 		return
 	}
@@ -500,8 +502,43 @@ func (v *viewer) applyPreviewInput(event previewinput.Event) {
 			}
 		}
 	}
-	if event.Kind == "up" || event.Kind == "release" {
+	if event.Kind == "release" {
+		for usage := range v.previewKeys {
+			v.releaseHostKey(usage)
+			delete(v.previewKeys, usage)
+		}
 		release()
+		return
+	}
+	if event.Kind == "up" {
+		release()
+		return
+	}
+	if event.Kind == "key_down" || event.Kind == "key_up" {
+		if event.Kind == "key_up" {
+			if v.previewKeys[event.Usage] {
+				v.releaseHostKey(event.Usage)
+				delete(v.previewKeys, event.Usage)
+			}
+			return
+		}
+		if v.editing != 0 {
+			return
+		}
+		if event.Kind == "key_down" {
+			if v.previewKeys == nil {
+				v.previewKeys = make(map[uint16]bool)
+			}
+			if v.previewKeys[event.Usage] {
+				return
+			}
+			if v.keys[event.Usage] {
+				return
+			}
+			if v.handleHostKey(event.Usage, true) && v.keys[event.Usage] {
+				v.previewKeys[event.Usage] = true
+			}
+		}
 		return
 	}
 	if v.editing != 0 || event.FrameWidth != v.width || event.FrameHeight != v.height {
@@ -525,6 +562,79 @@ func (v *viewer) applyPreviewInput(event previewinput.Event) {
 			v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
 		}
 	}
+}
+
+// handleHostKey is shared by the main and experimental preview windows.
+// It runs on the UI thread and keeps physical keys, mapped taps and joystick
+// bindings in the same ordered input queue.
+func (v *viewer) handleHostKey(usage uint16, down bool) bool {
+	if !display.ValidKeyboardUsage(usage) {
+		return false
+	}
+	if down && v.editing != 0 {
+		if v.editing == 3 || v.editing == 1 && v.pendingPoint == nil {
+			return true
+		}
+		point := v.pendingPoint
+		if v.editing == 2 {
+			point = nil
+		}
+		if err := v.setBinding(usage, point); err != nil {
+			v.mappingError = err.Error()
+		} else {
+			v.mappingError = ""
+			v.pendingPoint = nil
+		}
+		return true
+	}
+	if !down && v.editing != 0 {
+		return true
+	}
+	if !down {
+		return v.releaseHostKey(usage)
+	}
+	if v.keys == nil {
+		v.keys = make(map[uint16]bool)
+	}
+	v.inputError = ""
+	if v.keys[usage] {
+		return true
+	}
+	v.keys[usage] = true
+	if v.joystick != nil && joystickKey(usage) {
+		if v.width <= 0 || v.height <= 0 {
+			delete(v.keys, usage)
+			v.inputError = "画面尚未就绪，无法使用方向摇杆"
+			return true
+		}
+		p := v.joystick
+		v.enqueue(pointerEvent{kind: stickDown, usage: usage, x: int(p.Center.X*float64(v.width-1) + 0.5), y: int(p.Center.Y*float64(v.height-1) + 0.5), radius: max(1, int(p.Radius*float64(min(v.width-1, v.height-1))+0.5)), maxX: v.width - 1, maxY: v.height - 1})
+	} else if p, ok := v.bindings[usage]; ok {
+		if v.width <= 0 || v.height <= 0 {
+			delete(v.keys, usage)
+			v.inputError = "画面尚未就绪，无法使用游戏键位"
+			return true
+		}
+		v.enqueue(pointerEvent{kind: mappedDown, usage: usage, x: int(p.X*float64(v.width-1) + 0.5), y: int(p.Y*float64(v.height-1) + 0.5)})
+	} else {
+		v.enqueue(pointerEvent{kind: keyDown, usage: usage})
+	}
+	return true
+}
+
+func (v *viewer) releaseHostKey(usage uint16) bool {
+	if !v.keys[usage] {
+		return false
+	}
+	delete(v.keys, usage)
+	if v.joystick != nil && joystickKey(usage) {
+		v.enqueue(pointerEvent{kind: stickUp, usage: usage})
+	} else if _, mapped := v.bindings[usage]; mapped {
+		v.enqueue(pointerEvent{kind: mappedUp, usage: usage})
+	} else {
+		v.enqueue(pointerEvent{kind: keyUp, usage: usage})
+	}
+	return true
 }
 
 func (v *viewer) setFrameSize(width, height int) {
@@ -725,72 +835,11 @@ func (v *viewer) view(c *ui.Context) {
 			bounds := v.screen.Bounds(c)
 			switch ev.Kind {
 			case ui.InputKeyDown:
-				usage := uint16(ev.Code)
-				if !display.ValidKeyboardUsage(usage) {
-					return false
-				}
-				if v.editing != 0 {
-					if v.editing == 3 {
-						return true
-					}
-					if v.editing == 1 && v.pendingPoint == nil {
-						return true
-					}
-					point := v.pendingPoint
-					if v.editing == 2 {
-						point = nil
-					}
-					if err := v.setBinding(usage, point); err != nil {
-						v.mappingError = err.Error()
-					} else {
-						v.mappingError = ""
-						v.pendingPoint = nil
-					}
-					return true
-				}
-				if v.keys == nil {
-					v.keys = make(map[uint16]bool)
-				}
-				v.inputError = ""
-				if !v.keys[usage] {
-					v.keys[usage] = true
-					if v.joystick != nil && joystickKey(usage) {
-						if v.width <= 0 || v.height <= 0 {
-							delete(v.keys, usage)
-							v.inputError = "画面尚未就绪，无法使用方向摇杆"
-							return true
-						}
-						p := v.joystick
-						v.enqueue(pointerEvent{kind: stickDown, usage: usage, x: int(p.Center.X*float64(v.width-1) + 0.5), y: int(p.Center.Y*float64(v.height-1) + 0.5), radius: max(1, int(p.Radius*float64(min(v.width-1, v.height-1))+0.5)), maxX: v.width - 1, maxY: v.height - 1})
-					} else if p, ok := v.bindings[usage]; ok {
-						if v.width <= 0 || v.height <= 0 {
-							delete(v.keys, usage)
-							v.inputError = "画面尚未就绪，无法使用游戏键位"
-							return true
-						}
-						v.enqueue(pointerEvent{kind: mappedDown, usage: usage, x: int(p.X*float64(v.width-1) + 0.5), y: int(p.Y*float64(v.height-1) + 0.5)})
-					} else {
-						v.enqueue(pointerEvent{kind: keyDown, usage: usage})
-					}
-				}
-				return true
+				delete(v.previewKeys, uint16(ev.Code))
+				return v.handleHostKey(uint16(ev.Code), true)
 			case ui.InputKeyUp:
-				usage := uint16(ev.Code)
-				if v.editing != 0 {
-					return true
-				}
-				if !v.keys[usage] {
-					return false
-				}
-				delete(v.keys, usage)
-				if v.joystick != nil && joystickKey(usage) {
-					v.enqueue(pointerEvent{kind: stickUp, usage: usage})
-				} else if _, mapped := v.bindings[usage]; mapped {
-					v.enqueue(pointerEvent{kind: mappedUp, usage: usage})
-				} else {
-					v.enqueue(pointerEvent{kind: keyUp, usage: usage})
-				}
-				return true
+				delete(v.previewKeys, uint16(ev.Code))
+				return v.handleHostKey(uint16(ev.Code), false)
 			case ui.InputPointerDown:
 				if ev.Button != 0 {
 					return false
