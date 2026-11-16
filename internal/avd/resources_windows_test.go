@@ -128,3 +128,17 @@ func TestResourceOverridesRejectInvalidAndRunning(t *testing.T) {
 		t.Fatal("running instance settings changed")
 	}
 }
+
+func TestResourceSettingsDoNotCreateNonPlayFallback(t *testing.T) {
+	m := backupFixture(t)
+	candidate, err := m.WithName("FreshWithoutPlay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.SetResources(context.Background(), Resources{Cores: 2, RAMMiB: 1536}); err == nil {
+		t.Fatal("created an instance without a Play image")
+	}
+	if _, err := os.Stat(filepath.Join(m.Home, "FreshWithoutPlay.avd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected instance directory: %v", err)
+	}
+}

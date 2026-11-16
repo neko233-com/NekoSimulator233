@@ -14,12 +14,17 @@ import (
 func TestResourceSettingsMCP(t *testing.T) {
 	root := t.TempDir()
 	sdk := filepath.Join(root, "sdk")
-	image := filepath.Join(sdk, "system-images", "android-34", "google_apis", "x86_64", "system.img")
-	if err := os.MkdirAll(filepath.Dir(image), 0700); err != nil {
+	dir := filepath.Join(sdk, "system-images", "android-34", "google_apis_playstore", "x86_64")
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(image, []byte("test image"), 0600); err != nil {
-		t.Fatal(err)
+	for name, contents := range map[string]string{
+		"system.img": "test image", "package.xml": "<fake-package/>", "build.prop": "ro.build.version.incremental=12077443\n",
+		"source.properties": "Pkg.Revision=1\nAndroidVersion.ApiLevel=34\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis_playstore\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	manager := avd.Manager{SDK: sdk, Home: filepath.Join(root, "avd"), Name: "NekoMCPResources"}
 	server := New(func() (avd.Manager, error) { return manager, nil })

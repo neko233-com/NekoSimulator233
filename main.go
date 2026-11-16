@@ -30,6 +30,7 @@ type app struct {
 	updateMessage    string
 	viewers          map[string]*viewer
 	resources        map[string]*resourceSettings
+	displays         map[string]*displaySettingsWindow
 	selected         string
 	available        []avd.InstanceSummary
 	newInstance      string
@@ -384,20 +385,25 @@ func (a *app) view(c *ui.Context) {
 			if ui.Button(c.Key("resource-settings"), "资源设置…").Disabled(a.busy).Clicked() {
 				a.openResources()
 			}
+			if ui.Button(c.Key("display-settings"), "显示设置…").Disabled(a.busy).Clicked() {
+				a.openDisplaySettings()
+			}
 			if ui.Button(c.Key("device-info"), "系统兼容信息").Disabled(a.busy).Clicked() {
 				a.showDeviceInfo()
 			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c.Key("install-apk"), "安装 APK…").Disabled(a.busy).Clicked() {
 				a.chooseAPK(false)
 			}
 			if ui.Button(c.Key("update-apk"), "更新 APK…").Disabled(a.busy).Clicked() {
 				a.chooseAPK(true)
 			}
-		})
-		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c.Key("import-file"), "导入文件…").Disabled(a.busy).Clicked() {
 				a.chooseImportFile()
 			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
 			if ui.Button(c.Key("backup-instance"), "备份选中实例…").Disabled(a.busy).Clicked() {
 				a.transferBackup(false)
 			}

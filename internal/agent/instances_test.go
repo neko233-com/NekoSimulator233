@@ -82,6 +82,14 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 		t.Fatalf("new instance setup status: %s %v", setupJSON, err)
 	}
 	call("neko_set_resources", map[string]any{"cores": 2, "ram_mib": 1536}, false)
+	call("neko_set_display_settings", map[string]any{"width": 1280, "height": 720, "density": 320}, false)
+	display := call("neko_get_display_settings", map[string]any{}, false)
+	displayJSON, _ := json.Marshal(display.StructuredContent)
+	var displaySettings avd.DisplaySettings
+	if err := json.Unmarshal(displayJSON, &displaySettings); err != nil || displaySettings != (avd.DisplaySettings{Width: 1280, Height: 720, Density: 320}) {
+		t.Fatalf("wrong display settings: %s %v", displayJSON, err)
+	}
+	call("neko_set_display_settings", map[string]any{"width": 0, "height": 720, "density": 320}, true)
 	call("neko_select_instance", map[string]any{"name": "missing"}, true)
 	list := call("neko_list_instances", map[string]any{}, false)
 	b, _ := json.Marshal(list.StructuredContent)

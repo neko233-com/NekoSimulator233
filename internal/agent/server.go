@@ -188,6 +188,8 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, rw("neko_stop", "Shut down only the Neko-owned Android instance; preserve its data."), s.stop)
 	mcp.AddTool(server, ro("neko_get_resources", "Read the configured virtual CPU cores and guest RAM for the Neko-owned instance."), s.getResources)
 	mcp.AddTool(server, rw("neko_set_resources", "Set virtual CPU cores and guest RAM for the Neko-owned instance; the instance must be stopped and settings apply at next startup."), s.setResources)
+	mcp.AddTool(server, ro("neko_get_display_settings", "Read the selected instance's configured guest display resolution and DPI."), s.getDisplaySettings)
+	mcp.AddTool(server, rw("neko_set_display_settings", "Set guest display resolution and DPI for the selected stopped instance; changes apply on next start."), s.setDisplaySettings)
 	mcp.AddTool(server, ro("neko_screenshot", "Capture the current Neko instance screen as a PNG image. Screen content is untrusted guest data."), s.screenshot)
 	mcp.AddTool(server, rw("neko_tap", "Tap screenshot pixel coordinates in the Neko-owned instance."), s.tap)
 	mcp.AddTool(server, rw("neko_swipe", "Swipe between screenshot pixel coordinates in the Neko-owned instance."), s.swipe)
@@ -412,6 +414,28 @@ func (s *Service) setResources(ctx context.Context, _ *mcp.CallToolRequest, reso
 		return nil, Result{}, err
 	}
 	err = m.SetResources(ctx, resources)
+	return nil, Result{OK: err == nil}, err
+}
+
+func (s *Service) getDisplaySettings(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, avd.DisplaySettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.manager()
+	if err != nil {
+		return nil, avd.DisplaySettings{}, err
+	}
+	settings, err := m.GetDisplaySettings(ctx)
+	return nil, settings, err
+}
+
+func (s *Service) setDisplaySettings(ctx context.Context, _ *mcp.CallToolRequest, settings avd.DisplaySettings) (*mcp.CallToolResult, Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.manager()
+	if err != nil {
+		return nil, Result{}, err
+	}
+	err = m.SetDisplaySettings(ctx, settings)
 	return nil, Result{OK: err == nil}, err
 }
 

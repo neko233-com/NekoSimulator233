@@ -117,7 +117,7 @@ func (m Manager) SetResources(ctx context.Context, r Resources) error {
 	} else if !errors.Is(err, errInstanceNotRunning) {
 		return err
 	}
-	if err = m.Ensure(); err != nil {
+	if err = m.ensureWithImagePolicy(0, true); err != nil {
 		return err
 	}
 	dir, err := ownedAVD(m)

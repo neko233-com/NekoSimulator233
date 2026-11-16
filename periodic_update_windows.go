@@ -96,7 +96,7 @@ func attemptPeriodicUpdate(suppressed string, ops periodicUpdateOps) (bool, stri
 }
 
 func (a *app) periodicUpdateEligible() bool {
-	return !a.busy && !a.updateInProgress && a.backupCancel == nil && len(a.viewers) == 0 && len(a.resources) == 0 && strings.TrimSpace(a.newInstance) == ""
+	return !a.busy && !a.updateInProgress && a.backupCancel == nil && len(a.viewers) == 0 && len(a.resources) == 0 && len(a.displays) == 0 && strings.TrimSpace(a.newInstance) == ""
 }
 
 func (a *app) startPeriodicUpdates() {

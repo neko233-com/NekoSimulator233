@@ -103,7 +103,7 @@ func TestPeriodicUpdateDoesNotInterruptWork(t *testing.T) {
 	}
 	for _, current := range []*app{
 		{busy: true}, {updateInProgress: true}, {backupCancel: func() {}},
-		{viewers: map[string]*viewer{"active": {}}}, {resources: map[string]*resourceSettings{"editing": {}}}, {newInstance: "pending"},
+		{viewers: map[string]*viewer{"active": {}}}, {resources: map[string]*resourceSettings{"editing": {}}}, {displays: map[string]*displaySettingsWindow{"editing": {}}}, {newInstance: "pending"},
 	} {
 		if current.periodicUpdateEligible() {
 			t.Fatal("active work accepted")
