@@ -84,6 +84,7 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 		if os.Getenv("NEKO_TEST_FAKE_ADB_FAILURE") == "1" {
+			fmt.Fprintln(os.Stdout, "Performing Streamed Install")
 			fmt.Fprintln(os.Stderr, "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]")
 			os.Exit(1)
 		}
@@ -144,12 +145,12 @@ func TestInstallAPKUsesExplicitReplacementAndReportsFailure(t *testing.T) {
 		if err := json.Unmarshal(data, &args); err != nil {
 			t.Fatal(err)
 		}
-		if want := append([]string{"-s", instance.Serial, tc.command, tc.flag}, tc.paths...); !slices.Equal(args, want) {
+		if want := append([]string{"-s", instance.Serial, tc.command, "-t", tc.flag}, tc.paths...); !slices.Equal(args, want) {
 			t.Fatalf("adb args %q, want %q", args, want)
 		}
 	}
 	t.Setenv("NEKO_TEST_FAKE_ADB_FAILURE", "1")
-	if err := m.installAPKsUnchecked(context.Background(), instance, []string{apk}, true); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+	if err := m.installAPKsUnchecked(context.Background(), instance, []string{apk}, true); err == nil || !strings.Contains(err.Error(), "Performing Streamed Install") || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
 		t.Fatalf("missing Android package manager failure: %v", err)
 	}
 	t.Setenv("NEKO_TEST_FAKE_ADB_FAILURE", "")

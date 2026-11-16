@@ -711,6 +711,9 @@ func (m Manager) installAPKsUnchecked(ctx context.Context, instance Instance, pa
 	if len(fullPaths) > 1 {
 		args[0] = "install-multiple"
 	}
+	// Android requires -t for packages marked testOnly, including APKs
+	// produced by some development builds. Signature checks still apply.
+	args = append(args, "-t")
 	if replace {
 		args = append(args, "-r")
 	} else {
@@ -743,10 +746,14 @@ func (m Manager) installAPKsUnchecked(ctx context.Context, instance Instance, pa
 // is usually printed by adb, not represented by its process exit status.
 func apkInstallError(output []byte, err error) error {
 	reason := strings.TrimSpace(string(output))
-	if reason == "" {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			reason = strings.TrimSpace(string(exitErr.Stderr))
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		if stderr != "" {
+			if reason != "" {
+				reason += "\n"
+			}
+			reason += stderr
 		}
 	}
 	if reason == "" {
