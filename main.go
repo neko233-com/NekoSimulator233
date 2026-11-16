@@ -36,6 +36,9 @@ type app struct {
 	newSystem        string
 	backupCancel     context.CancelFunc
 	closeAfterBackup bool
+	updateInProgress bool
+	closeAfterUpdate bool
+	suppressedUpdate string
 }
 
 func (a *app) selectedName() string {
@@ -397,35 +400,43 @@ func (a *app) view(c *ui.Context) {
 	})
 }
 
-func prepareUpdate() (bool, string) {
+func lookupUpdate(skipOnce bool) (*update.Manifest, string, string) {
 	pending, pendingErr := update.PendingReboot()
 	if pendingErr != nil {
-		return false, "更新状态读取失败: " + pendingErr.Error()
+		return nil, "", "更新状态读取失败: " + pendingErr.Error()
 	}
 	if pending {
-		return false, "更新已安装，请重启 Windows 完成更新"
+		return nil, "", "更新已安装，请重启 Windows 完成更新"
 	}
-	if len(os.Args) > 1 && os.Args[1] == "--skip-update-once" {
+	if skipOnce && len(os.Args) > 1 && os.Args[1] == "--skip-update-once" {
 		b, _ := os.ReadFile(filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "last-update.txt"))
-		return false, string(b)
+		return nil, "", string(b)
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return false, "更新检查失败: " + err.Error()
+		return nil, "", "更新检查失败: " + err.Error()
 	}
 	installed := filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233", "NekoSimulator233.exe")
 	if !strings.EqualFold(filepath.Clean(executable), filepath.Clean(installed)) {
-		return false, ""
+		return nil, "", ""
 	}
 	manifest := filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "update.json")
 	m, err := update.Load(manifest, version)
 	if err != nil {
-		return false, "更新检查失败: " + err.Error()
+		return nil, "", "更新检查失败: " + err.Error()
 	}
 	if m == nil {
-		return false, ""
+		return nil, "", ""
 	}
-	if err = update.Start(m, version, executable); err != nil {
+	return m, executable, ""
+}
+
+func prepareUpdate() (bool, string) {
+	m, executable, message := lookupUpdate(true)
+	if m == nil {
+		return false, message
+	}
+	if err := update.Start(m, version, executable); err != nil {
 		return false, "更新准备失败: " + err.Error()
 	}
 	return true, ""
@@ -448,14 +459,25 @@ func main() {
 		return
 	}
 	a := &app{message: "正在连接…", updateMessage: updateMessage}
+	if len(os.Args) > 1 && os.Args[1] == "--skip-update-once" && strings.HasPrefix(updateMessage, "更新未完成") && !strings.Contains(updateMessage, "is still running; update deferred") {
+		m, _, _ := lookupUpdate(false)
+		a.suppressedUpdate = updateKey(m)
+	}
 	mygo.App.WhenReady(func() {
 		a.window = mygo.NewWindow(mygo.WindowOptions{Title: "NekoSimulator233", Width: 760, Height: 500, Content: ui.View(a.view)})
 		a.window.OnClose(func(e *mygo.CloseEvent) {
+			if a.updateInProgress {
+				a.closeAfterUpdate = true
+				a.message = "正在完成更新检查，结束后关闭…"
+				e.PreventDefault()
+				return
+			}
 			if a.cancelBackupForClose() {
 				e.PreventDefault()
 			}
 		})
 		a.refresh()
+		a.startPeriodicUpdates()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

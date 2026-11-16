@@ -157,4 +157,10 @@ func TestUpdateDefersForRunningApplication(t *testing.T) {
 	if err = ensureNotRunning(exe); err == nil {
 		t.Fatal("update did not detect running application")
 	}
+	if err = EnsureNoOtherProcesses(exe); err == nil {
+		t.Fatal("periodic update did not detect another running application")
+	}
+	if err = checkRunning(exe, uint32(cmd.Process.Pid)); err != nil {
+		t.Fatalf("process guard did not skip its supplied PID: %v", err)
+	}
 }

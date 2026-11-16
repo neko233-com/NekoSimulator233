@@ -19,6 +19,12 @@ import (
 // Start stages a verified local MSI and starts an independent updater. The caller
 // must exit after a successful start so Windows Installer can replace its files.
 func Start(m *Manifest, currentVersion, executable string) error {
+	return StartGuarded(m, currentVersion, executable, nil)
+}
+
+// StartGuarded rechecks the caller's safety conditions after staging and
+// before launching the updater. A rejected guard removes its staging folder.
+func StartGuarded(m *Manifest, currentVersion, executable string, guard func() error) error {
 	if m == nil {
 		return errors.New("missing update manifest")
 	}
@@ -81,6 +87,11 @@ func Start(m *Manifest, currentVersion, executable string) error {
 	}
 	cmd := exec.Command(worker, "--update-worker", stage, m.SHA256, m.Version, executable, strconv.Itoa(os.Getpid()))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
+	if guard != nil {
+		if err = guard(); err != nil {
+			return err
+		}
+	}
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -194,6 +205,16 @@ func Worker(args []string) (result error) {
 }
 
 func ensureNotRunning(executable string) error {
+	return checkRunning(executable, 0)
+}
+
+// EnsureNoOtherProcesses lets the active UI defer an update before it exits.
+// The worker repeats the check after the UI exits to handle races.
+func EnsureNoOtherProcesses(executable string) error {
+	return checkRunning(executable, uint32(os.Getpid()))
+}
+
+func checkRunning(executable string, skipPID uint32) error {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return err
@@ -201,6 +222,9 @@ func ensureNotRunning(executable string) error {
 	defer windows.CloseHandle(snapshot)
 	entry := windows.ProcessEntry32{Size: uint32(unsafeSizeProcessEntry32())}
 	for err = windows.Process32First(snapshot, &entry); err == nil; err = windows.Process32Next(snapshot, &entry) {
+		if entry.ProcessID == skipPID {
+			continue
+		}
 		name := windows.UTF16ToString(entry.ExeFile[:])
 		if !strings.EqualFold(name, "NekoSimulator233.exe") && !strings.EqualFold(name, "neko-mcp.exe") {
 			continue
