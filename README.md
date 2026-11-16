@@ -4,7 +4,7 @@ Windows Android 模拟器原型，使用 Go 1.27 和 MyGo 原生 UI。当前运�
 
 独立模式需要 Android SDK 的 `emulator`、`platform-tools`、可用的硬件 Vulkan GPU 和虚拟化。通过主窗口或 MCP 新建实例时使用 Android 34/35 的 `google_apis_playstore/x86_64` 镜像；若未安装，则尝试自动安装 Android 34 的官方 Play 镜像。选择 Android 11 时使用对应的 Android 30 Play 镜像，作为 32 位应用兼容路径。首次启动尚未创建的默认实例也会先准备 Play 镜像；准备过程支持进度和取消，Android 启动阶段单独限时三分钟。已创建实例不会自动切换镜像，旧的普通 Google APIs 镜像默认不包含 Play 商店。此路径尚未完成真实镜像下载、Google Play 登录、应用安装或 Vulkan 验证。程序通过 `ANDROID_HOME`、`ANDROID_SDK_ROOT` 或当前用户默认 SDK 目录查找工具；自己的实例数据放在 `%LOCALAPPDATA%/NekoSimulator233-data/avd`，不修改现有 AVD。启动时使用宿主 GPU 并启用 Vulkan，检查 Android 内枚举到的硬件 Vulkan 设备；没有硬件设备时会报告错误。窗口支持鼠标单指点击、拖动和物理键盘直通，并提供返回、主页、最近任务、音量和全屏按钮；目标画面采集频率为 30 帧/秒，画面窗口均不可见时暂停采集，失焦时释放按住的输入。
 
-新建实例自动准备镜像时，以及通过主窗口“安装 Google Play 镜像…”或 MCP 工具 `neko_install_play_image` 单独安装时，均支持进度与取消。默认 Android 34，主窗口选择 Android 11 时使用 API 30，MCP 参数 `api` 还可指定 35。需要 SDK Command-line Tools 和 JDK 17 或更高版本。程序不会自动接受 SDK 许可证；如尚未接受，请在 Android Studio 的 SDK Manager 中查看处理。安装不会改变已有实例，遇到已存在的不完整镜像目录会停止并提示检查。已在本机通过 SDK Manager 下载 Android 34 Play 镜像；本程序自动下载入口尚未完成真实下载验证。
+新建实例自动准备镜像时，以及通过主窗口“安装 Google Play 镜像…”或 MCP 工具 `neko_install_play_image` 单独安装时，均支持进度与取消。默认 Android 34，主窗口选择 Android 11 时使用 API 30，MCP 参数 `api` 还可指定 35。需要 SDK Command-line Tools 和 JDK 17 或更高版本。程序不会自动接受 SDK 许可证；如尚未接受，请在 Android Studio 的 SDK Manager 中查看处理。安装不会改变已有实例，遇到已存在的不完整镜像目录会停止并提示检查。Android Emulator 启动程序异常退出后会留出短暂的进程注册时间，再报告启动错误。已在本机通过 SDK Manager 下载 Android 34 Play 镜像；本程序自动下载入口尚未完成真实下载验证。
 
 如果已配置的 SDK 只有 Command-line Tools，首次启动会尝试通过该 SDK 安装缺失的 `platform-tools` 和 `emulator`。已有运行组件直接使用；存在但不完整的组件目录不会自动覆盖。此流程需要可用 JDK 及已接受的相应 SDK 许可证，尚不包含从零下载 Command-line Tools 或 JDK，也尚未完成真实下载验收。
 
@@ -51,14 +51,14 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.30
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.30-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.31
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.31-x64.msi
 ```
 
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.31-x64.msi -Version 0.1.31
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.32-x64.msi -Version 0.1.32
 ```
 
 安装版在启动时检查清单；运行期间每 10 分钟尝试检查，只有当前登录会话至少 2 分钟没有输入、没有打开画面或资源设置窗口、没有未完成的实例名称或其他操作时才会启动更新。发现更新后校验文件哈希、MSI 产品标识及版本，准备完成时再次检查会话空闲状态和其他本程序进程，然后启动独立更新进程，退出主程序并静默安装，最后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟；安装失败重开后，相同清单在本次运行中不自动重复安装，可修改清单或重新启动程序重试。需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。

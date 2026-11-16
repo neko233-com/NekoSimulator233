@@ -574,9 +574,11 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	if err := cmd.Start(); err != nil {
 		return Instance{}, fmt.Errorf("启动 Android Emulator 失败：%w", err)
 	}
-	// Reap the launcher without tying the emulator lifetime to the UI window.
-	go func() { _ = cmd.Wait() }()
-	ready, err := m.waitReady(ctx, fmt.Sprintf("emulator-%d", port))
+	// A launcher that exits successfully may have handed off to QEMU. An
+	// unsuccessful exit is useful only while no matching instance exists.
+	launcherExit := make(chan error, 1)
+	go func() { launcherExit <- cmd.Wait(); close(launcherExit) }()
+	ready, err := m.waitReadyWithLauncher(ctx, fmt.Sprintf("emulator-%d", port), launcherExit)
 	if err == nil {
 		m.scheduleTapTap(ready)
 	}
@@ -584,16 +586,38 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 }
 
 func (m Manager) waitReady(ctx context.Context, serial string) (Instance, error) {
+	return m.waitReadyWithLauncher(ctx, serial, nil)
+}
+
+func (m Manager) waitReadyWithLauncher(ctx context.Context, serial string, launcherExit <-chan error) (Instance, error) {
+	return waitInstanceReady(ctx, serial, m.discover, m.inspect, launcherExit, 5*time.Second)
+}
+
+func waitInstanceReady(ctx context.Context, serial string, discover func() (Instance, error), inspect func(context.Context, Instance) (Instance, error), launcherExit <-chan error, handoffGrace time.Duration) (Instance, error) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var launcherFailure error
+	var failureTimer *time.Timer
+	var failureDeadline <-chan time.Time
+	defer func() {
+		if failureTimer != nil {
+			failureTimer.Stop()
+		}
+	}()
 	var last error
 	for {
-		instance, err := m.discover()
+		if err := ctx.Err(); err != nil {
+			return Instance{}, fmt.Errorf("实例启动或 Vulkan 检查已取消：%w", err)
+		}
+		instance, err := discover()
 		if err == nil && instance.Serial == serial {
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			ready, probeErr := m.inspect(probeCtx, instance)
+			ready, probeErr := inspect(probeCtx, instance)
 			cancel()
 			if probeErr == nil {
+				if err := ctx.Err(); err != nil {
+					return Instance{}, fmt.Errorf("实例启动或 Vulkan 检查已取消：%w", err)
+				}
 				return ready, nil
 			}
 			if errors.Is(probeErr, errNoVulkan) {
@@ -606,6 +630,22 @@ func (m Manager) waitReady(ctx context.Context, serial string) (Instance, error)
 		select {
 		case <-ctx.Done():
 			return Instance{}, fmt.Errorf("实例启动或 Vulkan 检查超时：%v：%w", last, ctx.Err())
+		case launchErr, ok := <-launcherExit:
+			launcherExit = nil
+			if !ok || launchErr == nil {
+				continue // A successful launcher exit can be a normal handoff.
+			}
+			// Allow a child process time to register even if the wrapper
+			// exits unsuccessfully after handing off to it.
+			launcherFailure = launchErr
+			failureTimer = time.NewTimer(handoffGrace)
+			failureDeadline = failureTimer.C
+		case <-failureDeadline:
+			failureDeadline = nil
+			if instance, err := discover(); err == nil && instance.Serial == serial {
+				continue
+			}
+			return Instance{}, fmt.Errorf("Android Emulator 启动程序异常退出且实例未注册，请检查虚拟化、显卡驱动和 SDK 安装：%w", launcherFailure)
 		case <-ticker.C:
 		}
 	}
