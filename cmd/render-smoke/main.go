@@ -13,58 +13,28 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
-	"github.com/neko233-com/NekoSimulator233/internal/display"
-	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 )
 
 func run() error {
-	var source display.Session
+	manager, err := avd.DiscoverManager()
+	if err != nil {
+		return err
+	}
 	if home := os.Getenv("NEKO_SMOKE_AVD_HOME"); home != "" {
-		manager, err := avd.DiscoverManager()
-		if err != nil {
-			return err
-		}
 		manager.Home = home
-		if name := os.Getenv("NEKO_SMOKE_AVD_NAME"); name != "" {
-			manager.Name = name
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		instance, err := manager.Ready(ctx)
-		if err != nil {
-			return err
-		}
-		source, err = instance.Open()
-		if err != nil {
-			return err
-		}
-	} else {
-		root, err := mumu.Discover()
-		if err != nil {
-			return err
-		}
-		client, err := mumu.New(root)
-		if err != nil {
-			return err
-		}
-		instances, err := client.List()
-		if err != nil {
-			return err
-		}
-		var renderer *mumu.Renderer
-		for _, instance := range instances {
-			if instance.AndroidStarted {
-				renderer, err = mumu.OpenRenderer(root, instance)
-				break
-			}
-		}
-		if err != nil {
-			return err
-		}
-		if renderer == nil {
-			return fmt.Errorf("no running Android instance")
-		}
-		source = renderer
+	}
+	if name := os.Getenv("NEKO_SMOKE_AVD_NAME"); name != "" {
+		manager.Name = name
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	instance, err := manager.Ready(ctx)
+	if err != nil {
+		return err
+	}
+	source, err := instance.Open()
+	if err != nil {
+		return err
 	}
 	frame, err := source.Capture(nil)
 	source.Close()

@@ -17,22 +17,14 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
-	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 	"github.com/neko233-com/NekoSimulator233/internal/testutil"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
-func TestMuMuMigrationPreflightMCP(t *testing.T) {
-	sdk := t.TempDir()
-	s := &Service{
-		Manager: func() (avd.Manager, error) { return avd.Manager{SDK: sdk}, nil },
-		mumuList: func(context.Context) ([]mumu.Instance, error) {
-			return []mumu.Instance{{Index: "0", AndroidVersion: "15.0", Started: true}}, nil
-		},
-	}
+func TestMCPDoesNotExposeCompetitorIntegration(t *testing.T) {
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	ss, err := newServer(s).Connect(ctx, serverTransport, nil)
+	ss, err := newServer(&Service{}).Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,17 +34,14 @@ func TestMuMuMigrationPreflightMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
-	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_mumu_migration_preflight", Arguments: map[string]any{"index": "0"}})
-	if err != nil || result.IsError {
-		t.Fatalf("preflight: %+v %v", result, err)
+	result, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	data, err := json.Marshal(result.StructuredContent)
-	if err != nil || !strings.Contains(string(data), `"matching_image_api":35`) || !strings.Contains(string(data), `"full_migration_supported":false`) || !strings.Contains(string(data), `"matching_image_file_present":false`) {
-		t.Fatalf("report: %s %v", data, err)
-	}
-	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "neko_mumu_migration_preflight", Arguments: map[string]any{"index": "all"}})
-	if err != nil || !result.IsError {
-		t.Fatal("invalid index accepted")
+	for _, tool := range result.Tools {
+		if strings.Contains(strings.ToLower(tool.Name), "mumu") {
+			t.Fatalf("competitor integration is still exposed: %s", tool.Name)
+		}
 	}
 }
 

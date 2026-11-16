@@ -12,8 +12,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
-	"github.com/neko233-com/NekoSimulator233/internal/migration"
-	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 	"github.com/neko233-com/NekoSimulator233/internal/update"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
@@ -22,9 +20,6 @@ var version = "0.0.0"
 
 type app struct {
 	window           *mygo.Window
-	client           mumu.Client
-	root             string
-	instances        []mumu.Instance
 	busy             bool
 	message          string
 	updateMessage    string
@@ -220,122 +215,27 @@ func (a *app) refresh() {
 		return
 	}
 	a.busy = true
-	a.message = "正在读取 MuMu 实例…"
+	a.message = "正在读取独立实例…"
 	go func() {
-		manager, independentErr := avd.DiscoverManager()
+		manager, err := avd.DiscoverManager()
 		var available []avd.InstanceSummary
-		if independentErr == nil {
+		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			available, independentErr = manager.ListInstances(ctx)
+			available, err = manager.ListInstances(ctx)
 			cancel()
 		}
-		root, err := mumu.Discover()
-		var client mumu.Client
-		var instances []mumu.Instance
-		if err == nil {
-			client, err = mumu.New(root)
-		}
-		if err == nil {
-			instances, err = client.List()
-		}
-		a.window.Update(func() {
-			a.busy = false
-			if independentErr == nil {
-				a.setAvailable(available)
-			}
-			if err != nil {
-				a.message = "MuMu：" + err.Error()
-				if independentErr != nil {
-					a.message += "；独立实例：" + independentErr.Error()
-				}
-				return
-			}
-			a.client, a.root, a.instances = client, root, instances
-			a.message = fmt.Sprintf("已连接 MuMu · %d 个实例", len(instances))
-			if independentErr != nil {
-				a.message += "；独立实例：" + independentErr.Error()
-			}
-		})
+		a.window.Update(func() { a.applyIndependentRefresh(available, err) })
 	}()
 }
 
-func (a *app) open(instance mumu.Instance) {
-	if a.busy {
+func (a *app) applyIndependentRefresh(available []avd.InstanceSummary, err error) {
+	a.busy = false
+	if err != nil {
+		a.message = "读取独立实例失败：" + err.Error()
 		return
 	}
-	key := "mumu:" + instance.Index
-	if v := a.viewers[key]; v != nil {
-		v.win.Show()
-		v.win.Focus()
-		return
-	}
-	a.busy = true
-	a.message = "正在连接画面…"
-	root, client := a.root, a.client
-	go func() {
-		if !instance.AndroidStarted {
-			err := client.Open(instance)
-			a.window.Update(func() {
-				a.busy = false
-				if err != nil {
-					a.message = err.Error()
-				} else {
-					a.message = "已请求启动，请在 Android 启动后刷新并打开画面"
-				}
-			})
-			return
-		}
-		renderer, err := mumu.OpenRenderer(root, instance)
-		a.window.Update(func() {
-			a.busy = false
-			if err != nil {
-				a.message = err.Error()
-			} else {
-				a.message = "已连接实例画面"
-				if a.viewers == nil {
-					a.viewers = make(map[string]*viewer)
-				}
-				a.viewers[key] = openViewer(instance.Name, renderer, "", func() { delete(a.viewers, key) })
-			}
-		})
-	}()
-}
-
-func (a *app) checkMuMuMigration(instance mumu.Instance) {
-	if a.busy {
-		return
-	}
-	a.busy = true
-	a.message = "正在只读检查迁移条件…"
-	client := a.client
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
-		defer cancel()
-		manager, err := avd.DiscoverManager()
-		var report migration.Report
-		if err == nil {
-			report, err = migration.Check(ctx, instance.Index, manager.SDK, client.ListContext)
-		}
-		a.window.Update(func() {
-			a.busy = false
-			if err != nil {
-				a.message = "迁移检查失败：" + err.Error()
-				return
-			}
-			image := "源系统版本尚无匹配的受支持镜像"
-			if report.MatchingImageAPI != 0 {
-				image = fmt.Sprintf("检测到 Android API %d system.img，完整性未验证", report.MatchingImageAPI)
-				if !report.MatchingImageFilePresent {
-					image = fmt.Sprintf("缺少 Android API %d system.img", report.MatchingImageAPI)
-				}
-			}
-			state := "未确认源实例运行状态"
-			if report.SourceRunningReported {
-				state = "源实例正在运行"
-			}
-			a.message = fmt.Sprintf("MuMu %s：%s；%s。完整数据迁移尚未实现，未修改实例。", report.SourceIndex, state, image)
-		})
-	}()
+	a.setAvailable(available)
+	a.message = "已读取独立实例列表"
 }
 
 func (a *app) view(c *ui.Context) {
@@ -444,26 +344,6 @@ func (a *app) view(c *ui.Context) {
 		if ui.Button(c.Key("refresh"), "刷新实例").Disabled(a.busy).Clicked() {
 			a.refresh()
 		}
-		for _, instance := range a.instances {
-			instance := instance
-			ui.Row(c.Key("instance-" + instance.Index)).Gap(16).Children(func() {
-				state := "已停止"
-				if instance.Started {
-					state = "启动中"
-				}
-				if instance.AndroidStarted {
-					state = "运行中"
-				}
-				ui.Text(c, fmt.Sprintf("%s  ·  Android %s  ·  %s", instance.Name, instance.AndroidVersion, state))
-				if ui.PrimaryButton(c.Key("open-"+instance.Index), "打开").Disabled(a.busy).Clicked() {
-					a.open(instance)
-				}
-				if ui.Button(c.Key("migration-check-"+instance.Index), "检查迁移条件").Disabled(a.busy).Clicked() {
-					a.checkMuMuMigration(instance)
-				}
-			})
-		}
-		ui.Text(c, "独立实例使用本机 Android SDK；下方实例使用 MuMu 引擎。").FontSize(12).TextColor(t.TextMuted)
 		if a.updateMessage != "" {
 			ui.Text(c, a.updateMessage).FontSize(12).TextColor(t.TextMuted)
 		}

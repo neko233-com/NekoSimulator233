@@ -2,20 +2,37 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
-	"github.com/neko233-com/NekoSimulator233/internal/mumu"
 )
 
+func TestIndependentRefreshDoesNotDependOnMuMu(t *testing.T) {
+	a := &app{busy: true}
+	items := []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped", API: 34}}
+	a.applyIndependentRefresh(items, nil)
+	if a.busy || a.message != "已读取独立实例列表" || len(a.available) != 1 || a.selectedName() != avd.DefaultName {
+		t.Fatalf("independent refresh failed without MuMu: %+v", a)
+	}
+	a.busy = true
+	a.applyIndependentRefresh(nil, errors.New("SDK missing"))
+	if a.busy || a.message != "读取独立实例失败：SDK missing" || len(a.available) != 1 {
+		t.Fatalf("refresh error lost existing list: %+v", a)
+	}
+}
+
 func TestInstanceView(t *testing.T) {
-	a := &app{message: "已连接", instances: []mumu.Instance{{Index: "0", Name: "测试实例", AndroidVersion: "15.0", AndroidStarted: true}}}
+	a := &app{message: "已连接", available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped", API: 34}}}
 	tester := ui.NewTester(a.view, 760, 500)
-	for _, want := range []string{"NekoSimulator233", "已连接", "安装 Google Play 镜像…", "资源设置…", "显示设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "导入文件…", "常用应用状态", "打开 Chrome", "打开 Google Play", "打开 TapTap", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…", "测试实例  ·  Android 15.0  ·  运行中", "打开"} {
+	for _, want := range []string{"NekoSimulator233", "已连接", "安装 Google Play 镜像…", "资源设置…", "显示设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "导入文件…", "常用应用状态", "打开 Chrome", "打开 Google Play", "打开 TapTap", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…"} {
 		if !tester.HasText(want) {
 			t.Errorf("missing %q in %q", want, tester.Texts())
 		}
+	}
+	if tester.HasText("读取 MuMu 参考实例…") || tester.HasText("检查迁移条件") {
+		t.Fatal("the UI exposed a competing emulator integration")
 	}
 }
 

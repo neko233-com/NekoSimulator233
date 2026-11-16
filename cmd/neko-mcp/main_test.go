@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,9 @@ func TestStdioExecutable(t *testing.T) {
 	}
 	available := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
+		if strings.Contains(strings.ToLower(tool.Name), "mumu") {
+			t.Fatalf("installed MCP exposes competing-emulator tool %s", tool.Name)
+		}
 		available[tool.Name] = true
 	}
 	for _, name := range []string{"neko_status", "neko_screenshot", "neko_install_apk", "neko_import_file", "neko_export_file"} {
