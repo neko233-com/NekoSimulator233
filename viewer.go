@@ -246,18 +246,7 @@ func (v *viewer) run() {
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		input := newViewerInput(v.source)
-		defer input.release()
-		for {
-			select {
-			case <-v.done:
-				return
-			case ev := <-v.events:
-				if err := input.handle(ev); err != nil {
-					v.reportInput(err)
-				}
-			}
-		}
+		runViewerInput(v.done, v.events, newViewerInput(v.source), v.reportInput)
 	}()
 	defer func() {
 		<-inputDone

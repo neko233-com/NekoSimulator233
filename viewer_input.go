@@ -2,15 +2,53 @@ package main
 
 import (
 	"errors"
+	"time"
 
 	"github.com/neko233-com/NekoSimulator233/internal/display"
 )
+
+func runViewerInput(done <-chan struct{}, events <-chan pointerEvent, input *viewerInput, report func(error)) {
+	defer input.release()
+	var retryTimer *time.Timer
+	var retryCh <-chan time.Time
+	defer func() {
+		if retryTimer != nil {
+			retryTimer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		case ev := <-events:
+			if err := input.handle(ev); err != nil {
+				report(err)
+			}
+		case <-retryCh:
+			retryCh = nil
+			_ = input.retryReleases()
+		}
+		if input.hasPendingReleases() && retryCh == nil {
+			if retryTimer == nil {
+				retryTimer = time.NewTimer(time.Second)
+			} else {
+				retryTimer.Reset(time.Second)
+			}
+			retryCh = retryTimer.C
+		} else if !input.hasPendingReleases() && retryCh != nil {
+			retryTimer.Stop()
+			retryCh = nil
+		}
+	}
+}
 
 type viewerInput struct {
 	source                                            display.Session
 	keyboard                                          display.Keyboard
 	multi                                             display.MultiTouch
 	pressed                                           map[uint16]bool
+	keyReleasePending                                 map[uint16]bool
+	touchReleasePending                               bool
 	mapped                                            map[uint16]int
 	contacts                                          map[int]display.TouchPoint
 	touched                                           bool
@@ -20,7 +58,7 @@ type viewerInput struct {
 }
 
 func newViewerInput(source display.Session) *viewerInput {
-	v := &viewerInput{source: source, pressed: make(map[uint16]bool), mapped: make(map[uint16]int), contacts: make(map[int]display.TouchPoint), stickID: -1, stickPressed: make(map[uint16]bool)}
+	v := &viewerInput{source: source, pressed: make(map[uint16]bool), keyReleasePending: make(map[uint16]bool), mapped: make(map[uint16]int), contacts: make(map[int]display.TouchPoint), stickID: -1, stickPressed: make(map[uint16]bool)}
 	v.keyboard, _ = source.(display.Keyboard)
 	v.multi, _ = source.(display.MultiTouch)
 	return v
@@ -33,7 +71,7 @@ func (v *viewerInput) updateStick() error {
 	if len(v.stickPressed) == 0 {
 		delete(v.contacts, v.stickID)
 		v.stickID = -1
-		return v.syncTouches()
+		return v.releaseTouches()
 	}
 	dx, dy := 0, 0
 	if v.stickPressed[0x04] {
@@ -60,7 +98,62 @@ func (v *viewerInput) syncTouches() error {
 			points = append(points, p)
 		}
 	}
-	return v.multi.SetTouches(points)
+	err := v.multi.SetTouches(points)
+	if err == nil {
+		v.touchReleasePending = false
+	}
+	return err
+}
+
+func (v *viewerInput) releaseTouches() error {
+	err := v.syncTouches()
+	if err != nil {
+		v.touchReleasePending = true
+	}
+	return err
+}
+
+func (v *viewerInput) releaseKey(usage uint16) error {
+	if !v.pressed[usage] {
+		delete(v.keyReleasePending, usage)
+		return nil
+	}
+	if err := v.keyboard.KeyUp(usage); err != nil {
+		v.keyReleasePending[usage] = true
+		return err
+	}
+	delete(v.pressed, usage)
+	delete(v.keyReleasePending, usage)
+	return nil
+}
+
+func (v *viewerInput) hasPendingReleases() bool {
+	return len(v.keyReleasePending) != 0 || v.touchReleasePending
+}
+
+// Retry only release obligations. A failed press is not replayed because it
+// may already have reached the guest.
+func (v *viewerInput) retryReleases() error {
+	var result error
+	for usage := range v.keyReleasePending {
+		result = errors.Join(result, v.releaseKey(usage))
+	}
+	return errors.Join(result, v.retryTouchRelease())
+}
+
+func (v *viewerInput) retryTouchRelease() error {
+	if !v.touchReleasePending {
+		return nil
+	}
+	if v.multi != nil {
+		return v.releaseTouches()
+	}
+	if err := v.source.TouchUp(); err != nil {
+		return err
+	}
+	v.touched = false
+	v.touchReleasePending = false
+	return nil
 }
 
 func (v *viewerInput) handle(ev pointerEvent) error {
@@ -74,10 +167,8 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		var result error
 		if v.keyboard != nil {
 			for usage := range v.pressed {
-				if err := v.keyboard.KeyUp(usage); err != nil {
+				if err := v.releaseKey(usage); err != nil {
 					result = err
-				} else {
-					delete(v.pressed, usage)
 				}
 			}
 		}
@@ -91,7 +182,7 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		}
 		clear(v.stickPressed)
 		if v.multi != nil {
-			if err := v.syncTouches(); err != nil {
+			if err := v.releaseTouches(); err != nil {
 				result = err
 			}
 		}
@@ -99,6 +190,11 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 	case keyDown:
 		if v.keyboard == nil {
 			return errors.New("当前实例不支持键盘输入")
+		}
+		if v.keyReleasePending[ev.usage] {
+			if err := v.releaseKey(ev.usage); err != nil {
+				return err
+			}
 		}
 		if v.pressed[ev.usage] {
 			return nil
@@ -114,17 +210,16 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		if v.keyboard == nil || !v.pressed[ev.usage] {
 			return nil
 		}
-		if err := v.keyboard.KeyUp(ev.usage); err != nil {
-			return err
-		}
-		delete(v.pressed, ev.usage)
-		return nil
+		return v.releaseKey(ev.usage)
 	case mappedDown:
 		if v.multi == nil {
 			return errors.New("当前实例不支持游戏键位")
 		}
 		if _, held := v.mapped[ev.usage]; held {
 			return nil
+		}
+		if err := v.retryTouchRelease(); err != nil {
+			return err
 		}
 		for id := 1; id < 10; id++ {
 			if _, used := v.contacts[id]; !used {
@@ -138,7 +233,7 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		if id, ok := v.mapped[ev.usage]; ok {
 			delete(v.mapped, ev.usage)
 			delete(v.contacts, id)
-			return v.syncTouches()
+			return v.releaseTouches()
 		}
 		return nil
 	case stickDown:
@@ -147,6 +242,9 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 		}
 		if v.stickPressed[ev.usage] {
 			return nil
+		}
+		if err := v.retryTouchRelease(); err != nil {
+			return err
 		}
 		if v.stickID < 0 {
 			for id := 1; id < 10; id++ {
@@ -173,18 +271,33 @@ func (v *viewerInput) handle(ev pointerEvent) error {
 			return nil
 		}
 		delete(v.stickPressed, ev.usage)
-		return v.updateStick()
+		if err := v.updateStick(); err != nil {
+			v.touchReleasePending = true
+			return err
+		}
+		return nil
 	case pointerUp:
 		if !v.touched {
 			return nil
 		}
-		v.touched = false
 		if v.multi == nil {
-			return v.source.TouchUp()
+			if err := v.source.TouchUp(); err != nil {
+				v.touchReleasePending = true
+				return err
+			}
+			v.touched = false
+			v.touchReleasePending = false
+			return nil
 		}
+		v.touched = false
 		delete(v.contacts, 0)
-		return v.syncTouches()
+		return v.releaseTouches()
 	case pointerDown, pointerMove:
+		if v.touchReleasePending {
+			if err := v.retryTouchRelease(); err != nil {
+				return err
+			}
+		}
 		v.touched = true
 		if v.multi == nil {
 			return v.source.TouchDown(ev.x, ev.y)
