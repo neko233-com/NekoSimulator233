@@ -3,6 +3,16 @@ param(
     [Parameter(Mandatory)][string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
+# [IO.Path]::GetRelativePath is .NET Core only; keep the packaging script
+# usable with Windows PowerShell 5.1.
+function Get-RelativePath([string]$Base, [string]$Target) {
+    $prefix = [IO.Path]::GetFullPath($Base).TrimEnd('\') + '\'
+    $full = [IO.Path]::GetFullPath($Target)
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is outside SDK root: $Target"
+    }
+    return $full.Substring($prefix.Length)
+}
 $sdk = (Resolve-Path -LiteralPath $SdkRoot).Path
 $paths = @('emulator', 'platform-tools', 'build-tools/35.0.0', 'system-images/android-34/google_apis_playstore/x86_64')
 foreach ($file in @('emulator/emulator.exe', 'platform-tools/adb.exe', 'build-tools/35.0.0/aapt.exe', 'system-images/android-34/google_apis_playstore/x86_64/system.img', 'system-images/android-34/google_apis_playstore/x86_64/source.properties', 'system-images/android-34/google_apis_playstore/x86_64/package.xml', 'system-images/android-34/google_apis_playstore/x86_64/build.prop')) {
@@ -22,7 +32,7 @@ try {
             foreach ($item in Get-ChildItem -LiteralPath $directory.FullName -Recurse -Force) {
                 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Runtime path is a link: $($item.FullName)" }
                 if ($item.PSIsContainer) { continue }
-                $name = [IO.Path]::GetRelativePath($sdk, $item.FullName).Replace('\', '/')
+                $name = (Get-RelativePath $sdk $item.FullName).Replace('\', '/')
                 [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $item.FullName, $name, [IO.Compression.CompressionLevel]::Fastest) | Out-Null
             }
         }

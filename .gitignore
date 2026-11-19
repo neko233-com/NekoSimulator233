@@ -1,2 +1,12 @@
 /build/
 *.wixpdb
+/launcher/out/
+/launcher/debug.keystore
+/launcher/neko-launcher.apk
+/launcher/guest*.png
+
+/launcher/*.apk
+
+/launcher/*.png
+
+/launcher/*.idsig

@@ -446,16 +446,21 @@ func TestKeymapEditingAndPersistence(t *testing.T) {
 }
 
 func TestFitPoint(t *testing.T) {
-	if _, _, ok := fitPoint(10, 50, 200, 100, 100, 100, false); ok {
+	contain := display.FitContain
+	if _, _, ok := fitPoint(contain, 10, 50, 200, 100, 100, 100, false); ok {
 		t.Fatal("letterbox accepted")
 	}
-	x, y, ok := fitPoint(50, 0, 200, 100, 100, 100, false)
+	x, y, ok := fitPoint(contain, 50, 0, 200, 100, 100, 100, false)
 	if !ok || x != 0 || y != 0 {
 		t.Fatalf("unexpected origin: %d,%d %v", x, y, ok)
 	}
-	x, y, ok = fitPoint(300, 100, 200, 100, 100, 100, true)
+	x, y, ok = fitPoint(contain, 300, 100, 200, 100, 100, 100, true)
 	if !ok || x != 99 || y != 99 {
 		t.Fatalf("unexpected clamp: %d,%d %v", x, y, ok)
+	}
+	// Cover fills the area with no letterboxing, matching the default mode.
+	if _, _, ok := fitPoint(display.FitCover, 10, 50, 200, 100, 100, 100, false); !ok {
+		t.Fatal("cover must not letterbox")
 	}
 }
 

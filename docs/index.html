@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NekoSimulator233 · MuMu 平替</title>
+<style>
+  :root { color-scheme: dark; --bg:#1c1c24; --card:#262632; --line:#343446; --text:#eef1f8; --muted:#a8b0c0; --blue:#2e6ec8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.65 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:56px 24px 32px; text-align:center; background:linear-gradient(160deg,#20202c,#16161e); border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 8px; font-size:40px; }
+  header p { margin:0; color:var(--muted); }
+  main { max-width:960px; margin:0 auto; padding:32px 24px 80px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:24px; margin-bottom:20px; }
+  h2 { margin:0 0 12px; font-size:22px; }
+  a { color:#7fb4ff; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code, pre { background:#15151d; border-radius:6px; }
+  code { padding:2px 6px; }
+  pre { padding:14px; overflow:auto; border:1px solid var(--line); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .tile { display:block; padding:14px; border:1px solid var(--line); border-radius:10px; background:#20202a; }
+  .tile small { display:block; color:var(--muted); margin-top:4px; }
+  .mirror { display:inline-block; margin:4px 6px 0 0; font-size:13px; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:#1a1a23; }
+  footer { text-align:center; color:var(--muted); font-size:13px; padding:0 24px 40px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NekoSimulator233</h1>
+  <p>Windows Android 模拟器 · MuMu 平替 · 无广告、无会员、无推广</p>
+</header>
+<main>
+  <section>
+    <h2>项目</h2>
+    <div class="grid">
+      <a class="tile" href="https://github.com/neko233-com/NekoSimulator233">GitHub 仓库<small>源码、Issue、Release</small></a>
+      <a class="tile" href="https://github.com/neko233-com/NekoSimulator233/releases/latest">下载最新 MSI<small>小体积安装包</small></a>
+      <a class="tile" href="https://neko233-com.github.io/NekoSimulator233/">GitHub Pages<small>本站</small></a>
+      <a class="tile" href="https://cdn.jsdelivr.net/gh/neko233-com/NekoSimulator233@main/docs/">jsDelivr 镜像<small>文档静态资源加速</small></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>GitHub 镜像加速</h2>
+    <p>GitHub 链接会自动生成加速镜像。发布包下载校验 manifest 中的 SHA-256，镜像只改变传输路径，不改变校验结果。</p>
+    <div id="mirrors"></div>
+    <p style="color:var(--muted);font-size:13px">可在客户端设置 <code>NEKO_DISABLE_GITHUB_MIRROR=1</code> 关闭自动镜像；也可在运行时 manifest 里用 <code>mirrors</code> 指定自己的镜像模板（<code>{url}</code> 占位）。</p>
+  </section>
+
+  <section>
+    <h2>运行时独立下载</h2>
+    <p>MSI 默认不含 Android 运行时。首次使用时，在主窗口填写运行时 manifest 地址，或调用 MCP 工具：</p>
+    <pre>neko_download_runtime {"manifest":"https://…/runtime.json"}</pre>
+    <p>manifest 格式：</p>
+    <pre>{"url":"https://github.com/…/runtime.zip","sha256":"…","bytes":123,"mirrors":["https://your-mirror/{url}"]}</pre>
+  </section>
+
+  <section>
+    <h2>文档</h2>
+    <ul>
+      <li><a href="https://github.com/neko233-com/NekoSimulator233/blob/main/README.md">README</a> · <a href="https://cdn.jsdelivr.net/gh/neko233-com/NekoSimulator233@main/README.md">镜像</a></li>
+      <li><a href="https://github.com/neko233-com/NekoSimulator233/blob/main/docs/mumu-reverse-engineering.md">MuMu 逆向记录</a> · <a href="https://cdn.jsdelivr.net/gh/neko233-com/NekoSimulator233@main/docs/mumu-reverse-engineering.md">镜像</a></li>
+      <li><a href="https://github.com/neko233-com/NekoSimulator233/blob/main/docs/mumu-parity-assessment.md">平替差距评估</a> · <a href="https://cdn.jsdelivr.net/gh/neko233-com/NekoSimulator233@main/docs/mumu-parity-assessment.md">镜像</a></li>
+    </ul>
+  </section>
+</main>
+<footer>NekoSimulator233 · 开源 · 无广告</footer>
+<script>
+  // Automatically render GitHub acceleration mirrors for the release page.
+  const target = 'https://github.com/neko233-com/NekoSimulator233/releases/latest';
+  const prefixes = ['https://ghproxy.net/', 'https://gh-proxy.com/', 'https://github.moeyy.xyz/'];
+  const box = document.getElementById('mirrors');
+  if (box && !/NEKO_DISABLE_GITHUB_MIRROR/.test(location.search)) {
+    prefixes.forEach((prefix) => {
+      const a = document.createElement('a');
+      a.className = 'mirror';
+      a.href = prefix + target;
+      a.textContent = prefix.replace('https://','').replace(/\/$/,'');
+      a.rel = 'noopener noreferrer';
+      box.appendChild(a);
+    });
+  }
+</script>
+</body>
+</html>

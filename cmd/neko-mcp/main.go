@@ -8,15 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/NekoSimulator233/internal/agent"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
+	"github.com/neko233-com/NekoSimulator233/internal/desktopctl"
 	"github.com/neko233-com/NekoSimulator233/internal/frameprobe"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
 func main() {
+	// MuMu parity: new instances use the userdebug image by default so phone
+	// identity injection is available; set NEKO_PREFER_USERDEBUG_IMAGE=0 to opt out.
+	if os.Getenv("NEKO_PREFER_USERDEBUG_IMAGE") == "" {
+		_ = os.Setenv("NEKO_PREFER_USERDEBUG_IMAGE", "1")
+	}
 	if len(os.Args) == 2 && (os.Args[1] == "--vulkan-present-probe" || os.Args[1] == "--vulkan-pixel-probe" || strings.HasPrefix(os.Args[1], "--vulkan-guest-frame-probe")) {
 		var info vulkan.DeviceInfo
 		var err error
@@ -59,6 +66,17 @@ func main() {
 		}
 		return avd.DiscoverManager()
 	})
+	// Optional agent-desktop proxy (rea-mcp style): re-declare every tool exposed by
+	// `agent-desktop mcp` over stdio and delegate calls to it. Failure is non-fatal;
+	// agent-desktop is an optional dependency and the hand-written bridge above still
+	// works without it.
+	if enabled, ok := os.LookupEnv("NEKO_DESKTOP_PROXY"); ok && enabled != "0" && enabled != "" {
+		if count, err := desktopctl.RegisterProxy(context.Background(), server, os.Getenv("NEKO_DESKTOP_BIN"), 5*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "agent-desktop proxy disabled:", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "agent-desktop proxy: %d tools registered\n", count)
+		}
+	}
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

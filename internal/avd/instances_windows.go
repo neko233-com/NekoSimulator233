@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -33,7 +34,22 @@ type InstanceSummary struct {
 	API         int    `json:"api,omitempty" jsonschema:"Android system image API level, when recognized"`
 	ImageTag    string `json:"image_tag,omitempty" jsonschema:"google_apis_playstore or google_apis when recognized"`
 	TapTapSetup string `json:"taptap_setup,omitempty" jsonschema:"First-run TapTap task: pending, retry_pending, complete, or unknown"`
+	Cores       int    `json:"cores,omitempty" jsonschema:"Configured virtual CPU cores"`
+	RAMMiB      int    `json:"ram_mib,omitempty" jsonschema:"Configured guest RAM in MiB"`
+	Width       int    `json:"width,omitempty" jsonschema:"Configured guest display width"`
+	Height      int    `json:"height,omitempty" jsonschema:"Configured guest display height"`
+	Density     int    `json:"density,omitempty" jsonschema:"Configured guest display DPI"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+// configInt reads a bounded integer from an AVD config, leaving the zero value
+// when the key is absent or invalid so the UI can omit unknown details.
+func configInt(config map[string]string, key string, min, max int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(config[key]))
+	if err != nil || n < min || n > max {
+		return 0
+	}
+	return n
 }
 
 // ListInstances includes incomplete project directories as unknown instead
@@ -92,6 +108,11 @@ func (m Manager) ListInstances(ctx context.Context) ([]InstanceSummary, error) {
 				config, configErr := parseINI(filepath.Join(dir, "config.ini"))
 				if configErr == nil {
 					item.API, item.ImageTag, configErr = systemImageIdentity(config)
+					item.Cores = configInt(config, "hw.cpu.ncore", 1, 64)
+					item.RAMMiB = configInt(config, "hw.ramSize", 512, 131072)
+					item.Width = configInt(config, "hw.lcd.width", 320, 8192)
+					item.Height = configInt(config, "hw.lcd.height", 320, 8192)
+					item.Density = configInt(config, "hw.lcd.density", 72, 1000)
 				}
 				if configErr != nil {
 					item.State, item.Reason = "unknown", "实例镜像配置无效，已保留文件"

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
@@ -62,6 +63,21 @@ func (a *app) selectedStatus() string {
 	return ""
 }
 
+func deviceStateLabel(state string) string {
+	switch state {
+	case "not_created":
+		return "未开机"
+	case "stopped":
+		return "已停止"
+	case "running":
+		return "运行中"
+	case "unknown":
+		return "状态未知"
+	default:
+		return state
+	}
+}
+
 func (a *app) markInstanceState(name, state string) {
 	for i := range a.available {
 		if strings.EqualFold(a.available[i].Name, name) {
@@ -117,13 +133,17 @@ func (a *app) createIndependent() {
 		var items []avd.InstanceSummary
 		created := false
 		if err == nil {
-			err = manager.CreatePlayInstance(ctx, name, api, func(percent int) {
-				a.window.Update(func() {
-					if a.sdkJob == job && a.sdkCancel != nil && ctx.Err() == nil {
-						a.message = fmt.Sprintf("正在准备 Google Play 镜像：%d%%", percent)
-					}
+			if os.Getenv("NEKO_PREFER_USERDEBUG_IMAGE") == "1" {
+				err = manager.CreateInstanceAPI(ctx, name, api)
+			} else {
+				err = manager.CreatePlayInstance(ctx, name, api, func(percent int) {
+					a.window.Update(func() {
+						if a.sdkJob == job && a.sdkCancel != nil && ctx.Err() == nil {
+							a.message = fmt.Sprintf("正在准备 Google Play 镜像：%d%%", percent)
+						}
+					})
 				})
-			})
+			}
 			if err == nil {
 				created = true
 				items, err = manager.ListInstances(ctx)

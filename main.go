@@ -31,6 +31,15 @@ type app struct {
 	newInstance      string
 	newSystem        string
 	deviceTools      bool
+	runtimeManifest  string
+	runtimeCancel    context.CancelFunc
+	thumbs           map[string]*ui.Bitmap
+	thumbPending     map[string]bool
+	batchPanel       bool
+	sideTab          string
+	deviceSearch     string
+	deviceSort       string
+	deviceGridView   bool
 	showCreate       bool
 	backupCancel     context.CancelFunc
 	closeAfterBackup bool
@@ -131,7 +140,7 @@ func (a *app) startIndependent() {
 			if a.viewers == nil {
 				a.viewers = make(map[string]*viewer)
 			}
-			a.viewers[key] = openViewer(name, source, bindingsPath, func() { delete(a.viewers, key) })
+			a.viewers[key] = openViewer(name, source, bindingsPath, instance.Serial, func() { delete(a.viewers, key) })
 		})
 	}()
 }
@@ -267,6 +276,16 @@ func (a *app) toolsView(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Gap(8).Children(func() {
+			ui.TextInput(c.Key("runtime-manifest"), &a.runtimeManifest).Placeholder("运行时清单 URL 或本地 manifest.json").Width(360).Disabled(a.busy)
+			if ui.Button(c.Key("download-runtime"), "下载运行组件…").Disabled(a.busy).Clicked() {
+				a.downloadRuntime()
+			}
+			if a.runtimeCancel != nil && ui.Button(c.Key("cancel-runtime"), "取消下载").Clicked() {
+				a.runtimeCancel()
+				a.message = "正在取消运行组件下载…"
+			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
 			ui.Select(c.Key("new-system"), &a.newSystem, []string{systemAuto, systemAndroid11}).Label("新实例系统").Disabled(a.busy)
 			if ui.Button(c.Key("install-play-image"), "安装 Google Play 镜像…").Disabled(a.busy).Clicked() {
 				a.installPlayImage()
@@ -276,8 +295,40 @@ func (a *app) toolsView(c *ui.Context) {
 				a.message = "正在取消准备或启动…"
 			}
 		})
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("batch-start"), "批量开机").Disabled(a.busy).Clicked() {
+				a.batchStart()
+			}
+			if ui.Button(c.Key("batch-stop"), "批量关机").Disabled(a.busy).Clicked() {
+				a.batchStop()
+			}
+			if ui.Button(c.Key("arrange-windows"), "排列窗口").Clicked() {
+				a.arrangeViewers()
+			}
+		})
+		ui.Text(c, "批量开机按列表依次启动未运行的实例；排列窗口将已打开的画面平铺。").FontSize(12).TextColor(t.TextMuted)
 		if status := a.selectedStatus(); status != "" {
 			ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+		}
+		if len(a.available) > 0 {
+			ui.Text(c, "设备列表").FontSize(15).Bold()
+			for _, item := range a.available {
+				device := item
+				label := fmt.Sprintf("%s · %s", device.Name, deviceStateLabel(device.State))
+				if device.API != 0 {
+					label = fmt.Sprintf("%s · Android API %d", label, device.API)
+				}
+				ui.Row(c).Gap(8).Children(func() {
+					ui.Text(c, label).FontSize(13)
+					if ui.Button(c.Key("select-"+device.Name), "选择").Disabled(a.busy).Clicked() {
+						a.selected = device.Name
+					}
+					if ui.Button(c.Key("open-"+device.Name), "▶ 打开").Disabled(a.busy).Clicked() {
+						a.selected = device.Name
+						a.startIndependent()
+					}
+				})
+			}
 		}
 		for _, item := range a.available {
 			if item.State == "unknown" {
@@ -310,6 +361,15 @@ func (a *app) toolsView(c *ui.Context) {
 			}
 			if ui.Button(c.Key("import-file"), "导入文件…").Disabled(a.busy).Clicked() {
 				a.chooseImportFile()
+			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			if ui.Button(c.Key("shared-folder"), "打开共享文件夹…").Clicked() {
+				if err := openSharedFolder(a.selectedName()); err != nil {
+					a.message = "打开共享文件夹失败：" + err.Error()
+				} else {
+					a.message = "已打开当前实例的共享文件夹"
+				}
 			}
 		})
 		ui.Row(c).Gap(8).Children(func() {
@@ -402,6 +462,11 @@ func prepareUpdate() (bool, string) {
 }
 
 func main() {
+	// MuMu parity: prefer the userdebug image so phone identity injection works
+	// by default. Callers can opt out with NEKO_PREFER_USERDEBUG_IMAGE=0.
+	if os.Getenv("NEKO_PREFER_USERDEBUG_IMAGE") == "" {
+		_ = os.Setenv("NEKO_PREFER_USERDEBUG_IMAGE", "1")
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--vulkan-preview-worker" {
 		if err := vulkan.RunPreview(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)

@@ -158,6 +158,12 @@ func (m Manager) ensureWithImagePolicy(requestedAPI int, requirePlay bool) error
 	if !requirePlay {
 		tags = append(tags, "google_apis")
 	}
+	// NEKO_PREFER_USERDEBUG_IMAGE makes new instances prefer the userdebug
+	// google_apis image (MuMu-like identity injection). GUI and MCP enable it
+	// by default; callers that require Play images are unaffected.
+	if !requirePlay && strings.EqualFold(os.Getenv("NEKO_PREFER_USERDEBUG_IMAGE"), "1") {
+		tags = []string{"google_apis", "google_apis_playstore"}
+	}
 	for _, tag := range tags {
 		for _, level := range levels {
 			p := filepath.Join("system-images", "android-"+level, tag, "x86_64")
@@ -296,7 +302,24 @@ func parseINI(path string) (map[string]string, error) {
 }
 
 func (m Manager) discover() (Instance, error) {
-	return m.discoverIn(filepath.Join(os.TempDir(), "avd", "running"), processRunning)
+	dirs := []string{filepath.Join(os.TempDir(), "avd", "running")}
+	// Hosts and harnesses may run the agent with TEMP pointed at the Windows
+	// directory while the emulator (launched earlier) advertised into the
+	// per-user temp. Check both so an already-running instance is still found.
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		dirs = append(dirs, filepath.Join(local, "Temp", "avd", "running"))
+	}
+	var lastErr error = errInstanceNotRunning
+	for _, dir := range dirs {
+		instance, err := m.discoverIn(dir, processRunning)
+		if err == nil {
+			return instance, nil
+		}
+		if !errors.Is(err, errInstanceNotRunning) {
+			lastErr = err
+		}
+	}
+	return Instance{}, lastErr
 }
 
 // Unknown or incomplete metadata for a live process is not proof that the
@@ -563,7 +586,17 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	if err != nil {
 		return Instance{}, err
 	}
-	args := []string{"-avd", m.Name, "-no-window", "-no-boot-anim", "-no-snapshot", "-gpu", "host", "-feature", "Vulkan", "-port", strconv.Itoa(port), "-grpc", strconv.Itoa(grpcPort), "-grpc-use-token"}
+	phone, err := m.PhoneIdentity()
+	if err != nil {
+		return Instance{}, fmt.Errorf("读取手机身份配置失败：%w", err)
+	}
+	// emulator.exe translates -prop before handing off to QEMU, so the property
+	// overrides must precede the -avd option.
+	args := append(phone.PropArgs(), "-avd", m.Name, "-no-window", "-no-boot-anim", "-no-snapshot", "-gpu", "host", "-feature", "Vulkan", "-port", strconv.Itoa(port), "-grpc", strconv.Itoa(grpcPort), "-grpc-use-token")
+	if !phone.Empty() {
+		// Required for adb remount so phone identity can be written at boot.
+		args = append(args, "-writable-system")
+	}
 	resources, err := resourcesOverride(filepath.Join(m.Home, m.Name+".avd"))
 	if err != nil {
 		return Instance{}, err
@@ -572,8 +605,11 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 		args = append(args, "-memory", strconv.Itoa(resources.RAMMiB), "-cores", strconv.Itoa(resources.Cores))
 	}
 	cmd := exec.Command(filepath.Join(m.SDK, "emulator", "emulator.exe"), args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = emulatorProcAttr()
 	cmd.Env = append(os.Environ(), "ANDROID_AVD_HOME="+m.Home, "ANDROID_HOME="+m.SDK)
+	if os.Getenv("NEKO_EMULATOR_DEBUG") == "1" {
+		cmd.Stderr = os.Stderr
+	}
 	if err := cmd.Start(); err != nil {
 		return Instance{}, fmt.Errorf("启动 Android Emulator 失败：%w", err)
 	}
@@ -583,9 +619,33 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	go func() { launcherExit <- cmd.Wait(); close(launcherExit) }()
 	ready, err := m.waitReadyWithLauncher(ctx, fmt.Sprintf("emulator-%d", port), launcherExit)
 	if err == nil {
+		if identity, idErr := m.PhoneIdentity(); idErr == nil && !identity.Empty() {
+			// Identity injection reboots the guest; use a fresh timeout so the
+			// caller's start deadline cannot cancel the reboot handshake.
+			applyCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			if applyErr := m.ApplyPhoneIdentity(applyCtx, ready); applyErr != nil {
+				cancel()
+				return ready, fmt.Errorf("手机身份注入失败：%w", applyErr)
+			}
+			time.Sleep(5 * time.Second)
+			ready, err = m.waitReady(applyCtx, ready.Serial)
+			cancel()
+		}
+	}
+	if err == nil {
 		m.scheduleTapTap(ready)
 	}
 	return ready, err
+}
+
+// emulatorProcAttr detaches QEMU from the launching console. Without
+// DETACHED_PROCESS, closing the cmd/PowerShell window sends CTRL_CLOSE_EVENT to
+// the whole process group and silently kills every running emulator.
+func emulatorProcAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
 }
 
 func (m Manager) waitReady(ctx context.Context, serial string) (Instance, error) {

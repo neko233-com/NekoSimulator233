@@ -1,7 +1,8 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.1.32',
     [string]$BundleSdkRoot = $env:ANDROID_HOME,
-    [switch]$WithoutRuntime
+    [switch]$WithoutRuntime,
+    [switch]$WithRuntime
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -9,9 +10,12 @@ $build = Join-Path $root 'build'
 New-Item -ItemType Directory -Path $build -Force | Out-Null
 Push-Location $root
 try {
+    # Small MSI by default: the Android runtime is downloaded separately at
+    # first use (see internal/runtimeinstall). -WithRuntime is only for custom
+    # offline bundles.
     $includeRuntime = 0
     $runtimeBundle = Join-Path $build ("android-runtime-{0}.zip" -f [guid]::NewGuid().ToString('N'))
-    if (-not $WithoutRuntime) {
+    if ($WithRuntime -and -not $WithoutRuntime) {
         if (-not $BundleSdkRoot) { $BundleSdkRoot = Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
         & (Join-Path $PSScriptRoot 'bundle-runtime.ps1') -SdkRoot $BundleSdkRoot -OutputPath $runtimeBundle
         $includeRuntime = 1

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,7 +34,11 @@ func (s *Service) createInstance(ctx context.Context, req *mcp.CallToolRequest, 
 			_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{ProgressToken: token, Progress: float64(percent), Total: 100, Message: "准备 Google Play 系统镜像"})
 		}
 	}
-	err = m.CreatePlayInstance(ctx, request.Name, request.API, notify)
+	if os.Getenv("NEKO_PREFER_USERDEBUG_IMAGE") == "1" {
+		err = m.CreateInstanceAPI(ctx, request.Name, request.API)
+	} else {
+		err = m.CreatePlayInstance(ctx, request.Name, request.API, notify)
+	}
 	return nil, Result{OK: err == nil}, err
 }
 

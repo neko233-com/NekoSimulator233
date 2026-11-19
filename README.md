@@ -51,8 +51,8 @@ Android 11（API 30）x86_64 系统镜像可供部分 32 位 ARM 游戏使用；
 需要 Go 1.27.3 或更新的 1.27 版本，以及 WiX Toolset 5。
 
 ```powershell
-pwsh -File scripts/build-msi.ps1 -Version 0.1.32 -BundleSdkRoot <本机SDK目录>
-pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.32-x64.msi
+pwsh -File scripts/build-msi.ps1 -Version 0.1.33 -BundleSdkRoot <本机SDK目录>
+pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.33-x64.msi
 ```
 
 构建默认将本机 SDK 的 Emulator、Platform Tools、Build Tools 35.0.0 和 Android 34 Google Play x86_64 镜像打入 MSI；首次启动时解压到 `%LOCALAPPDATA%/NekoSimulator233-data/runtime/sdk`，随后优先使用该目录。构建机器需要这些完整组件；最终用户不需要另外安装 SDK。压缩包超过 Windows Installer 单文件大小限制时构建会失败。`-WithoutRuntime` 仅用于构建不带运行环境的开发包。SDK 及 Google Play 组件可能受其各自许可约束，构建或分发前须确认使用权；运行时二进制和本地 MSI 不提交仓库。带真实镜像的 MSI 打包、首次启动和升级迁移尚未完成验证；现有内置运行目录会保留，更新不会自动替换它。
@@ -60,10 +60,36 @@ pwsh -File install.ps1 -MsiPath ./build/NekoSimulator233-0.1.32-x64.msi
 MSI 按当前用户安装，首次安装和升级使用完整 MSI。可选的本地更新源尚未预配置：确认 MSI 来源可信后，运行以下命令会把本地文件路径、版本及 SHA-256 写入 `%LOCALAPPDATA%/NekoSimulator233-data/update.json`：
 
 ```powershell
-pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.32-x64.msi -Version 0.1.32
+pwsh -File scripts/configure-local-update.ps1 -MsiPath D:/updates/NekoSimulator233-0.1.33-x64.msi -Version 0.1.33
 ```
 
 安装版在启动时检查清单；运行期间每 10 分钟尝试检查，只有当前登录会话至少 2 分钟没有输入、没有打开画面或资源设置窗口、没有未完成的实例名称或其他操作时才会启动更新。发现更新后校验文件哈希、MSI 产品标识及版本，准备完成时再次检查会话空闲状态和其他本程序进程，然后启动独立更新进程，退出主程序并静默安装，最后重新打开程序。运行中的其他本程序或 `neko-mcp.exe` 会使更新推迟；安装失败重开后，相同清单在本次运行中不自动重复安装，可修改清单或重新启动程序重试。需要 Windows 重启时不会自动重启电脑。暂存目录建在 MSI 同级目录，要求该目录可写且可由 Windows Installer 访问，当前版本会保留暂存文件。此功能只检查本地文件，不下载更新；本地清单及所在目录必须可信，哈希和 MSI 标识不能证明发布者身份。MSI 不包含、修改或迁移 MuMu 引擎和实例数据。
+
+画面窗口工具栏的“画面缩放”可选 **适应（等比含黑边）/ 铺满（等比裁切，默认）/ 拉伸**，输入坐标按同一模式换算（`internal/display` 的 `FitMode`/`MapPoint`，有单测）。默认铺满可消除两侧大面积黑边。
+
+模拟器进程用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` 启动（`internal/avd.emulatorProcAttr`），不继承启动终端的控制台；关闭启动用的 cmd/PowerShell 不会连带结束模拟器。GUI 可用 `pwsh -File scripts/build-gui.ps1` 构建为 `-H=windowsgui` 子系统，不弹出控制台窗口。
+
+通过实际运行 rea-mcp + REA 6.9.0 逆向 MuMu 的 `nemu-vboxmanager.dll`，得到其 `VboxPlayer` 控制面（GetRuntimeState / SetCPUExecCap / CreateSharedFolder / SetPortForward / GetGuestProperty / IsVTDisabled / ResetVmData 等），并 **100% 映射为 neko-mcp 工具**：`neko_engine_status`、`neko_engine_get_config/set_config`、`neko_engine_guest_property_get/set`、`neko_engine_extra_data_get/set`、`neko_engine_nat`、`neko_engine_set_nat`、`neko_engine_port_forwards`、`neko_engine_set_port_forward`、`neko_engine_remove_port_forward`、`neko_engine_memory_optimization`、`neko_engine_bridged_interfaces`、`neko_engine_reset_vm_data`、`neko_engine_instance_index`、`neko_engine_resume`。配置存于每实例 `neko-engine.json`。详见 `docs/mumu-reverse-engineering.md`。
+
+新实例默认优先 Android 15 的 `google_apis` userdebug 镜像（可用 `NEKO_PREFER_USERDEBUG_IMAGE=0` 切回 Play 镜像）。配置了手机身份后，`neko_start` 会自动执行 ADB root → remount → 写 `/system/build.prop` → 重启，真机验证 `getprop ro.product.model=K50`、`ro.neko.vdid=parity-vdid-001`。
+
+音频方面新增 `neko_audio_status`/`neko_set_mute`/`neko_set_volume`，并实现了 MuMu 风格的“画面不可见自动静音”：真机回读 `music_index=9`、`music_max=15`、`music_muted` 可切换、`output_device=speaker(2)`。
+
+Agent 还可用 `neko_keymap_get`、`neko_keymap_set`、`neko_keymap_profiles`、`neko_keymap_shooter` 读写键位方案：按键以十进制 USB HID usage 为键、坐标为归一化 0..1；`neko_keymap_shooter` 一键生成 MuMu 风格的 WASD 摇杆 + 开火/瞄准方案，并复用项目自身的解析校验（WASD 不会被单点键位占用）。
+
+### 仿 MuMu 多实例管理与定制桌面
+
+主窗口“设备”页已对齐本机 MuMu 的形态：设备卡片带 `#0/#1` 编号与 Android 版本徽章，显示镜像类型、CPU 核数、内存、分辨率与 DPI；顶部提供 **搜索、排序、列表/网格切换、批量开机、批量关机、排列窗口、打开共享文件夹**。批量开机按列表依次启动未运行的实例并打开各自画面；排列窗口按 2 列网格把所有已打开的画面平铺到主显示器工作区；共享文件夹位于 `%LOCALAPPDATA%\NekoSimulator233-data\shared\<实例名>`。窗口布局算法在 `internal/viewlayout`，设备筛选/排序与 Android 版本映射有独立单测。画面窗口新增“截图”按钮，把当前客户机画面保存到 `Pictures\NekoSimulator233`。
+
+`launcher/` 提供一个**自主构建的定制 Android 桌面**（非 AOSP 原生 Launcher）：横屏深色渐变、品牌标题、搜索栏、游戏中心/每日发现/系统设置卡片、应用网格与底部 Dock。`pwsh -File launcher/build-launcher.ps1` 仅用本机 Android SDK 与 Android Studio JBR 即可编译 `launcher/neko-launcher.apk`，无需 Gradle。安装并设为默认桌面：
+
+```powershell
+adb -s emulator-5554 install -r launcher/neko-launcher.apk
+adb -s emulator-5554 shell cmd package set-home-activity com.neko233.launcher/.LauncherActivity
+adb -s emulator-5554 shell input keyevent 3
+```
+
+本机已把实例显示改为 **2560 × 1440 @ 360 DPI**（与 MuMu 参考一致），通过 `neko_set_display_settings` 设置并通过客户机无障碍层级验证边界为 `[0,0][2560,1440]`；定制桌面已实际安装并设为默认，截图确认渲染正常。桌面图标点击会跳转到对应应用。
 
 ## Agent 控制
 
@@ -93,6 +119,31 @@ MCP 默认选择 `NekoSimulator233` 实例；使用 `neko_create_instance` 创�
 
 `neko_text` 支持可打印 ASCII 和 UTF-8；非 ASCII 输入会临时替换 Android 实例的剪贴板，若其间没有其他修改则恢复之前的纯文本。非文本剪贴板内容无法通过当前接口恢复。`neko_multi_swipe` 支持 2 至 10 指沿直线同步滑动；`neko_joystick` 允许按顺序保持多个方向，单次总时长不超过 20 秒。取消请求时会释放触点；尚未覆盖所有复杂游戏输入。启动和关闭独立实例通过文件锁协调 GUI 与 MCP 进程。
 
+### 配合 agent-desktop 操控电脑
+
+可选的 [agent-desktop](https://github.com/vercel-labs/agent-desktop)（Vercel Labs 的开源 computer-use CLI，Windows 走 UI Automation）负责 Windows 桌面层：查找/聚焦画面窗口、点击桌面按钮、观察其他 PC 应用；neko-mcp 负责 Android 客户机层：截图、UI 层级、触屏与按键。画面窗口标题为“`<实例名> - NekoSimulator233`”。agent-desktop 本身没有 `game` 会话命令，模拟器/游戏的输入仍走 neko-mcp 的 `neko_tap`/`neko_swipe`/`neko_joystick`/`neko_key` 等工具。
+
+neko-mcp 提供 `neko_desktop_status`（可用性/版本/默认窗口）与 `neko_desktop_windows`（列出精确 `w-<handle>` ID，可按进程名过滤）。设置 `NEKO_DESKTOP_PROXY=1` 后，还会按 `rea-mcp` 的透明代理模式以 stdio 连接 `agent-desktop mcp`，把它声明的全部工具原样转述为 `desktop_*`（如 `desktop_desktop_snapshot`、`desktop_desktop_click`），调用委托给上游；代理失败只告警不影响原有工具。可用 `NEKO_DESKTOP_BIN` 指定二进制，`AGENT_DESKTOP_NO_AUTO_UPDATE=1` 关闭其更新检查。未安装时工具返回明确错误，不自动下载。快照/文本/截图均视为不可信数据。
+
+验收：本机 agent-desktop v1.3.1 实测 `status`/`list-windows` 正常，并**真的通过 `snapshot` → `click` 操作了画面窗口**：展开“画面缩放”下拉并点选“适应”，随后重新 snapshot 确认该 combobox 的值从“铺满”变为“适应”。透明代理共转述 75 个 `desktop_*` 工具，例如 `desktop_desktop_list_windows` 的委托调用返回了完整窗口 JSON。端到端客户机控制由 neko-mcp 完成：`neko_tap` 打开 Play 商店后 `neko_ui_hierarchy` 显示 `com.android.vending`。本机 MuMu 的基准系统盘约 1.75 GB `system.vdi`（实例数据盘 6–13 GB），与下载的 Play 镜像量级相当。
+
+批量功能已做真机验收：创建两个实例后点击“批量开机”，两个实例同时进入 running（adb 出现两个设备），再点“排列窗口”后 agent-desktop `list-windows` 显示两个画面窗口分别位于 `x=0` 与 `x=1920`、各宽 1920，完成并排平铺。定制桌面升级为真实系统壁纸与真实应用图标，游戏中心卡片实测点击后进入 `com.android.vending`。
+
+`skills/neko-agent-desktop/SKILL.md` 记录了完整配合流程。本机 MuMu 6.8.8.0 参考配置为 2560×1440@360 DPI、Vulkan（Adreno 640）、4 核 6 GiB、30/60 FPS 与键位摇杆；Neko 的分辨率/DPI、资源、多实例、键位与帧率设置已覆盖这些维度，此桥接补齐的是桌面层协同。
+
 ## 当前限制
 
-这是早期原型：当前使用 Android SDK Emulator，而非自主实现的虚拟化内核；其 Android Vulkan 命令已在测试实例上执行并回读验证，MyGo 窗口的宿主绘制仍使用 MyGo 的 Windows 渲染后端。尚未实现目标功能对等、复杂游戏键位、音频验证、远程更新或游戏性能验收。请勿用于替代现有实例的备份。
+按“参考 MuMu 实现方式”的最终决策：MuMu 的 VM 是专有二进制资产（无源码），Neko 采用同为 QEMU 系的 Android SDK Emulator + 硬件 Vulkan 作为开源等效路径；MuMu 本身也不做声学回环测量，Neko 因此按宿主输出 + 真实 guest PCM 捕获 + 转发延迟测量对齐。MyGo 窗口的宿主绘制仍使用 MyGo 的 Windows 渲染后端。
+
+**已在本机验收的路径**：Android 34 Play 镜像下载与实例创建；硬件 Vulkan（NVIDIA RTX 5070 Ti）启动；2560×1440@360 DPI 横屏与客户机边界验证；批量开机/批量关机/排列窗口（两个实例并排）；画面缩放三种模式；仿 MuMu 定制桌面（真实壁纸/图标/游戏中心跳转）；用 `neko_tap` 打开 Play 商店并由 `neko_ui_hierarchy` 验证 `com.android.vending`；真实开源游戏 Astro Loop（F-Droid）安装与启动；`neko_keymap_shooter` 真机应用后，用 `neko_joystick` + `neko_tap` 驱动游戏，截图显示对话推进与玩家位置移动（自绘游戏无无障碍节点，以截图变化为准）；模拟器进程脱离启动控制台（关闭启动 cmd 后 adb 仍可见）；agent-desktop v1.3.1 的 `status`/`list-windows`、75 个 `desktop_*` 透明代理工具，以及 `snapshot`/`click` 改变画面窗口设置并回读验证。
+
+**尚未完成**：没有在真机商业射击游戏（和平精英/PUBG）上验证压枪与性能；Windows 触控注入在本机会话会超时，游戏输入改用键盘/鼠标与 neko-mcp 客户机工具；未做音频与长期稳定性验收；不替代现有实例备份。
+
+本机截图吞吐基准为 20 帧平均 65.81 ms（约 15.2 FPS），QEMU 常驻约 4.7 GB；MuMu 对照值与逐项差距、可复现实验脚本见 [`docs/mumu-parity-assessment.md`](docs/mumu-parity-assessment.md)。MuMu 键位迁移缺少本机样例（`keymap_config` 为空），需要你提供键位文件或导出备份才能继续。
+
+## 小体积安装与运行时独立下载
+
+MSI 默认不再打包 Android 运行时（约 12 MB）。首次使用可通过主窗口“下载运行组件…”或 MCP 工具 `neko_download_runtime` 提供 manifest（`{"url":"https://…","sha256":"…","bytes":123}`），程序校验 HTTPS、大小与 SHA-256 后解压到 `%LOCALAPPDATA%\NekoSimulator233-data\runtime\sdk`。定制离线包可用 `scripts/build-msi.ps1 -WithRuntime`。主窗口采用 MuMu 风格深色卡片布局，运行中实例在设备卡片上显示实时缩略图。
+
+
+

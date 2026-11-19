@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/png"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
 	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
 )
@@ -79,10 +83,13 @@ type viewer struct {
 	editing       int // 0 normal, 1 bind, 2 remove, 3 joystick position
 	pendingPoint  *mappedPoint
 	mappingError  string
+	fitMode       display.FitMode
+	audioSerial   string
+	instanceName  string
 }
 
-func openViewer(name string, source display.Session, bindingsPath string, onClosed func()) *viewer {
-	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), visibilityCh: make(chan struct{}, 1), message: "正在读取画面…"}
+func openViewer(name string, source display.Session, bindingsPath, audioSerial string, onClosed func()) *viewer {
+	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), visibilityCh: make(chan struct{}, 1), message: "正在读取画面…", fitMode: display.FitCover, audioSerial: audioSerial, instanceName: name}
 	if _, ok := source.(display.MultiTouch); ok {
 		v.baseKeymap = bindingsPath
 		v.profile = defaultKeymapProfile
@@ -97,7 +104,31 @@ func openViewer(name string, source display.Session, bindingsPath string, onClos
 			v.mappingError = err.Error()
 		}
 	}
-	v.win = mygo.NewWindow(mygo.WindowOptions{Title: name + " - NekoSimulator233", Width: 1000, Height: 650, Content: ui.View(v.view)})
+	geometry, hasGeometry := loadViewerGeometry(name)
+	width, height := 1000, 650
+	if hasGeometry {
+		width, height = geometry.Width, geometry.Height
+	} else if strings.EqualFold(name, avd.DefaultName) {
+		geometry, hasGeometry = defaultViewerGeometry(), true
+		width, height = geometry.Width, geometry.Height
+	}
+	v.win = mygo.NewWindow(mygo.WindowOptions{Title: name + " - NekoSimulator233", Width: width, Height: height, Content: ui.View(v.view)})
+	if hasGeometry {
+		v.win.SetBounds(mygo.Rectangle{X: geometry.Left, Y: geometry.Top, Width: geometry.Width, Height: geometry.Height})
+		if geometry.Maximized {
+			v.win.Maximize()
+		}
+	}
+	v.win.OnClose(func(*mygo.CloseEvent) {
+		// Capture bounds before teardown: Bounds() can be empty in OnClosed.
+		bounds := v.win.Bounds()
+		if bounds.Width >= 320 && bounds.Height >= 240 {
+			_ = saveViewerGeometry(name, viewerGeometry{
+				Left: int(bounds.X), Top: int(bounds.Y), Width: int(bounds.Width), Height: int(bounds.Height),
+				Maximized: v.win.IsMaximized(),
+			})
+		}
+	})
 	v.win.OnClosed(func() {
 		v.stop()
 		if onClosed != nil {
@@ -134,6 +165,31 @@ func (v *viewer) setMainVisibility(flag *atomic.Bool, hidden bool) {
 	} else {
 		v.notifyVisibility()
 	}
+	v.applyAudioMutePolicy()
+}
+
+// applyAudioMutePolicy mirrors MuMu's volume_setting.window_minimized_mute:
+// mute guest media audio when no viewer surface is visible, and unmute when
+// one becomes visible again. It runs off the UI thread.
+func (v *viewer) applyAudioMutePolicy() {
+	if v.audioSerial == "" || v.instanceName == "" {
+		return
+	}
+	mute := !v.captureVisible()
+	serial, name := v.audioSerial, v.instanceName
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		manager, err := avd.DiscoverManager()
+		if err != nil {
+			return
+		}
+		manager, err = manager.WithName(name)
+		if err != nil {
+			return
+		}
+		_ = manager.SetMusicMute(ctx, serial, mute)
+	}()
 }
 
 func (v *viewer) setPreviewVisibility(shown bool) {
@@ -563,22 +619,59 @@ func (v *viewer) reportInput(err error) {
 	})
 }
 
-// fitPoint rejects letterboxing on down and clamps a drag to the display.
-func fitPoint(x, y, w, h float32, fw, fh int, clamp bool) (int, int, bool) {
-	if w <= 0 || h <= 0 || fw <= 0 || fh <= 0 {
-		return 0, 0, false
+// saveScreenshot writes the current guest frame to the user's Pictures folder,
+// matching MuMu's one-click screenshot action. Capture runs off the UI thread.
+func (v *viewer) saveScreenshot() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		frame, err := v.source.Capture(nil)
+		if err == nil && ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			v.reportInput(err)
+			return
+		}
+		dir := filepath.Join(os.Getenv("USERPROFILE"), "Pictures", "NekoSimulator233")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			v.reportInput(err)
+			return
+		}
+		name := filepath.Join(dir, fmt.Sprintf("neko-%s.png", time.Now().Format("20060102-150405")))
+		file, err := os.Create(name)
+		if err != nil {
+			v.reportInput(err)
+			return
+		}
+		err = png.Encode(file, frame)
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			v.reportInput(err)
+			return
+		}
+		v.win.Update(func() { v.message = "截图已保存：" + name })
+	}()
+}
+
+// painterFit keeps MyGo's drawing and our input mapping on the same mode.
+func painterFit(mode display.FitMode) ui.Fit {
+	switch mode {
+	case display.FitCover:
+		return ui.Cover
+	case display.FitStretch:
+		return ui.FillBox
+	default:
+		return ui.Contain
 	}
-	s := math.Min(float64(w)/float64(fw), float64(h)/float64(fh))
-	dw, dh := float64(fw)*s, float64(fh)*s
-	x1 := (float64(w) - dw) / 2
-	y1 := (float64(h) - dh) / 2
-	px, py := (float64(x)-x1)/s, (float64(y)-y1)/s
-	if !clamp && (px < 0 || py < 0 || px >= float64(fw) || py >= float64(fh)) {
-		return 0, 0, false
-	}
-	px = math.Max(0, math.Min(float64(fw-1), px))
-	py = math.Max(0, math.Min(float64(fh-1), py))
-	return int(px), int(py), true
+}
+
+// fitPoint maps viewer pixels to guest pixels using the active scaling mode.
+func fitPoint(mode display.FitMode, x, y, w, h float32, fw, fh int, clamp bool) (int, int, bool) {
+	return display.MapPoint(mode, x, y, w, h, fw, fh, clamp)
 }
 
 func (v *viewer) enqueue(e pointerEvent) {
@@ -891,6 +984,9 @@ func (v *viewer) view(c *ui.Context) {
 				v.releaseHostInput()
 				v.win.ToggleFullScreen()
 			}
+			if ui.Button(c.Key("save-screenshot"), "截图").Clicked() {
+				v.saveScreenshot()
+			}
 			if v.keymap != nil {
 				label := "编辑键位"
 				if v.editing != 0 {
@@ -919,6 +1015,17 @@ func (v *viewer) view(c *ui.Context) {
 				var rate int
 				if _, err := fmt.Sscanf(selected, "%d FPS", &rate); err == nil {
 					v.setCaptureRate(rate)
+				}
+			}
+			fitSelected := v.fitMode.String()
+			if ui.Select(c.Key("fit-mode"), &fitSelected, []string{"适应", "铺满", "拉伸"}).Label("画面缩放").Changed() {
+				switch fitSelected {
+				case "铺满":
+					v.fitMode = display.FitCover
+				case "拉伸":
+					v.fitMode = display.FitStretch
+				default:
+					v.fitMode = display.FitContain
 				}
 			}
 			if _, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
@@ -981,7 +1088,7 @@ func (v *viewer) view(c *ui.Context) {
 		canvas := ui.Box(c.Key("screen")).WidthPercent(100).Grow(1).Focusable().AutoFocus().Bind(&v.screen)
 		canvas.Draw(func(p *ui.Painter, r ui.Rect) {
 			if v.bitmap != nil {
-				p.Image(v.bitmap, r, ui.Contain)
+				p.Image(v.bitmap, r, painterFit(v.fitMode))
 			}
 			if v.editing != 0 {
 				drawKeymapOverlay(p, r, v.width, v.height, v.bindings, v.joystick, v.pendingPoint)
@@ -1007,7 +1114,7 @@ func (v *viewer) view(c *ui.Context) {
 						v.enqueue(pointerEvent{kind: pointerUp})
 					}
 				}
-				x, y, ok := fitPoint(ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, false)
+				x, y, ok := fitPoint(v.fitMode, ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, false)
 				if !ok {
 					return false
 				}
@@ -1039,7 +1146,7 @@ func (v *viewer) view(c *ui.Context) {
 				if !v.held {
 					return false
 				}
-				x, y, ok := fitPoint(ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, true)
+				x, y, ok := fitPoint(v.fitMode, ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, true)
 				if ok {
 					v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
 				}
