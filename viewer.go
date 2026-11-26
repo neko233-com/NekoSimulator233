@@ -60,8 +60,9 @@ const (
 type emulatorViewer struct {
 	app          *app
 	name         string
-	title        string
-	serial       string
+	title         string
+	lastDragClick time.Time
+	serial        string
 	win          *client.Window
 	source       display.Session
 	frameRes     *client.Resource
@@ -991,6 +992,13 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 
 	hDrag := v.interact(func(ev *client.Event) {
 		if md := ev.GetMouseDown(); md != nil && md.Button == client.MouseLeft {
+			now := time.Now()
+			if now.Sub(v.lastDragClick) < 350*time.Millisecond {
+				v.lastDragClick = time.Time{}
+				toggleMaximizeWindowByTitle(v.title)
+				return
+			}
+			v.lastDragClick = now
 			dragWindowByTitle(v.title)
 		}
 	})
@@ -1004,10 +1012,13 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 			OverflowX:     scene.OverflowHidden.Enum(),
 		}),
 		scene.Div(eid()).
-			Interact(&scene.Interaction{MouseDown: hDrag}).
+			Focusable(0).
+			Interact(&scene.Interaction{Focusable: true, MouseDown: hDrag}).
 			Style(&scene.Style{
-				FlexGrow: scene.Ptr[float32](1),
-				Height:   scene.Percent(100),
+				FlexGrow:   scene.Ptr[float32](1),
+				MinWidth:   scene.Pixels(36),
+				Height:     scene.Percent(100),
+				Background: scene.RGB(colTabStripBg),
 			}),
 		rightTools,
 	).Style(&scene.Style{

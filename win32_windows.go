@@ -5,7 +5,9 @@ package main
 import (
 	"math"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/neko233-com/NekoSimulator233/internal/viewlayout"
@@ -29,6 +31,7 @@ var (
 	procReleaseCapture   = user32DLL.NewProc("ReleaseCapture")
 	procSendMessageW     = user32DLL.NewProc("SendMessageW")
 	procIsZoomed         = user32DLL.NewProc("IsZoomed")
+	procGetAsyncKeyState = user32DLL.NewProc("GetAsyncKeyState")
 )
 
 const (
@@ -193,8 +196,31 @@ func dragWindowByTitle(title string) {
 	if hwnd == 0 {
 		return
 	}
-	_, _, _ = procReleaseCapture.Call()
-	_, _, _ = procSendMessageW.Call(hwnd, wmNCLButtonDown, htCaption, 0)
+	var startPt trayPoint
+	var startRect winRect
+	_, _, _ = procGetCursorPos.Call(uintptr(unsafe.Pointer(&startPt)))
+	_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&startRect)))
+
+	go func() {
+		ticker := time.NewTicker(8 * time.Millisecond)
+		defer ticker.Stop()
+		lastX, lastY := startPt.X, startPt.Y
+		for range ticker.C {
+			state, _, _ := procGetAsyncKeyState.Call(0x01) // VK_LBUTTON
+			if state&0x8000 == 0 {
+				return
+			}
+			var cur trayPoint
+			_, _, _ = procGetCursorPos.Call(uintptr(unsafe.Pointer(&cur)))
+			if cur.X == lastX && cur.Y == lastY {
+				continue
+			}
+			lastX, lastY = cur.X, cur.Y
+			nx := startRect.Left + (cur.X - startPt.X)
+			ny := startRect.Top + (cur.Y - startPt.Y)
+			_, _, _ = procSetWindowPos.Call(hwnd, 0, uintptr(nx), uintptr(ny), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
+		}
+	}()
 }
 
 func minimizeWindowByTitle(title string) {
@@ -204,17 +230,31 @@ func minimizeWindowByTitle(title string) {
 	}
 }
 
+var (
+	restoreMu    sync.Mutex
+	restoreRects = make(map[uintptr]winRect)
+)
+
 func toggleMaximizeWindowByTitle(title string) {
 	hwnd := findWindowByTitle(title)
 	if hwnd == 0 {
 		return
 	}
-	zoomed, _, _ := procIsZoomed.Call(hwnd)
-	if zoomed != 0 {
-		_, _, _ = procShowWindow.Call(hwnd, swRestore)
-	} else {
-		_, _, _ = procShowWindow.Call(hwnd, swMaximize)
+	restoreMu.Lock()
+	prev, isMax := restoreRects[hwnd]
+	if isMax {
+		delete(restoreRects, hwnd)
+		restoreMu.Unlock()
+		_, _, _ = procSetWindowPos.Call(hwnd, 0, uintptr(prev.Left), uintptr(prev.Top), uintptr(prev.Right-prev.Left), uintptr(prev.Bottom-prev.Top), swpNoZOrder|swpNoActivate)
+		return
 	}
+	var cur winRect
+	_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&cur)))
+	restoreRects[hwnd] = cur
+	restoreMu.Unlock()
+
+	wa := primaryWorkArea()
+	_, _, _ = procSetWindowPos.Call(hwnd, 0, uintptr(wa.X), uintptr(wa.Y), uintptr(wa.Width), uintptr(wa.Height), swpNoZOrder|swpNoActivate)
 }
 
 func setWindowBoundsByTitle(title string, x, y, w, h int) bool {
