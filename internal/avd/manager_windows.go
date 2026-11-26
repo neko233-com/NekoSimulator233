@@ -633,6 +633,7 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 		}
 	}
 	if err == nil {
+		_ = m.SyncHostTimeAndLocale(ctx, ready)
 		m.scheduleTapTap(ready)
 	}
 	return ready, err

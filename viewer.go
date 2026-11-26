@@ -762,7 +762,7 @@ func (v *emulatorViewer) buildView() *scene.Node {
 	if v.drawerOpen {
 		children = append(children, v.buildDrawer())
 	}
-	children = append(children, v.buildViewport())
+	children = append(children, v.buildViewport(), v.buildBottomNavBar())
 
 	return scene.Div(1, children...).Style(&scene.Style{
 		Display:       scene.DisplayFlex.Enum(),
@@ -1108,6 +1108,11 @@ func (v *emulatorViewer) buildToolsDrawer() *scene.Node {
 					v.render()
 				}
 			}
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("同步电脑时间/地区", v.click(func() {
+			v.runADBTask("同步电脑时间与地区", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.SyncHostTimeAndLocale(ctx, inst)
+			})
 		}), colBgSubtle, colBgHover, colTextPrimary, 0),
 	).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), Gap: scene.Pixels(6)})
 }
@@ -1470,4 +1475,50 @@ func (v *emulatorViewer) buildViewport() *scene.Node {
 			OverflowX:      scene.OverflowHidden.Enum(),
 			OverflowY:      scene.OverflowHidden.Enum(),
 		})
+}
+
+func (v *emulatorViewer) buildBottomNavBar() *scene.Node {
+	navBtn := func(label string, tip string, fn func()) *scene.Node {
+		return scene.Div(eid(), labelText(label, 13, 0xE5E7EB, true)).
+			Focusable(0).
+			OnClick(v.click(fn)).
+			Accessible(tip, &scene.Accessibility{Role: scene.RoleButton}).
+			Style(&scene.Style{
+				Display:        scene.DisplayFlex.Enum(),
+				AlignItems:     scene.AlignCenter.Enum(),
+				JustifyContent: scene.JustifyCenter.Enum(),
+				Height:         scene.Pixels(26),
+				Padding:        &scene.Edges{Left: scene.Pixels(18), Right: scene.Pixels(18)},
+				Background:     scene.RGB(0x1F2937),
+				CornerRadius:   scene.Ptr[float32](13),
+				Cursor:         scene.CursorPointer.Enum(),
+			}).Hover(&scene.Style{Background: scene.RGB(0x374151)})
+	}
+
+	return scene.Div(eid(),
+		navBtn("◁  返回", "返回上一步", func() {
+			v.enqueue(pointerEvent{kind: navigate, action: display.Back})
+			v.app.syncHub.BroadcastNavigate(v.name, display.Back)
+		}),
+		navBtn("○  主页", "回到桌面 Home", func() {
+			v.activeAppPkg = ""
+			v.enqueue(pointerEvent{kind: navigate, action: display.Home})
+			v.app.syncHub.BroadcastNavigate(v.name, display.Home)
+			v.render()
+		}),
+		navBtn("▢  多任务", "最近任务", func() {
+			v.enqueue(pointerEvent{kind: navigate, action: display.Overview})
+			v.app.syncHub.BroadcastNavigate(v.name, display.Overview)
+		}),
+	).Style(&scene.Style{
+		Display:        scene.DisplayFlex.Enum(),
+		FlexDirection:  scene.FlexRow.Enum(),
+		AlignItems:     scene.AlignCenter.Enum(),
+		JustifyContent: scene.JustifyCenter.Enum(),
+		Width:          scene.Percent(100),
+		Height:         scene.Pixels(34),
+		Gap:            scene.Pixels(16),
+		Background:     scene.RGB(0x111827),
+		FlexShrink:     scene.Ptr[float32](0),
+	})
 }

@@ -265,6 +265,16 @@ func run(args []string) error {
 		}
 		return m.SetGPSLocation(ctx, inst, lat, lon, 10)
 
+	case "sync-time":
+		if len(rest) < 1 {
+			return fmt.Errorf("usage: neko-cli sync-time <name>")
+		}
+		m, inst, err := runningManagerFor(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		return m.SyncHostTimeAndLocale(ctx, inst)
+
 	default:
 		return fmt.Errorf("unknown command %q (run neko-cli --help)", cmd)
 	}
