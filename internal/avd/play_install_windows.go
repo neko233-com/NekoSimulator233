@@ -162,8 +162,28 @@ func sdkManagerJava() (string, error) {
 			return candidate, nil
 		}
 	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		managed := filepath.Join(local, "NekoSimulator233-data", "runtime", "jdk", "bin", "java.exe")
+		if nativeJava(managed) {
+			return managed, nil
+		}
+	}
 	if java, err := exec.LookPath("java.exe"); err == nil && nativeJava(java) {
 		return java, nil
+	}
+	for _, pat := range []string{
+		`C:\Program Files\Eclipse Adoptium\jdk-*\bin\java.exe`,
+		`C:\Program Files\Microsoft\jdk-*\bin\java.exe`,
+		`C:\Program Files\Java\jdk-*\bin\java.exe`,
+		`C:\Program Files\Android\Android Studio\jbr\bin\java.exe`,
+		`D:\Tools\jdk-*\**\bin\java.exe`,
+	} {
+		matches, _ := filepath.Glob(pat)
+		for _, cand := range matches {
+			if nativeJava(cand) {
+				return cand, nil
+			}
+		}
 	}
 	return "", errors.New("未找到当前程序架构的 Java；请配置 Neko JDK 或将 JAVA_HOME 设置为对应架构的 JDK 17 或更高版本")
 }

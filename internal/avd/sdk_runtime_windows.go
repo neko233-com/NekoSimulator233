@@ -113,7 +113,9 @@ func missingSDKRuntime(root string) ([]sdkRuntimePackage, error) {
 }
 
 func runSDKPackageInstall(ctx context.Context, root, pkg string, notify func(int)) error {
-	if pkg != "platform-tools" && pkg != "emulator" && pkg != tapTapBuildToolsPackage {
+	if pkg != "platform-tools" && pkg != "emulator" && pkg != tapTapBuildToolsPackage &&
+		pkg != "system-images;android-35;google_apis;x86_64" &&
+		pkg != "system-images;android-34;google_apis;x86_64" {
 		return errors.New("不支持的 SDK 运行组件")
 	}
 	java, err := sdkManagerJava()

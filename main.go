@@ -410,6 +410,33 @@ func (a *app) startInstance(name string) {
 
 	go func() {
 		manager, err := selectedManager(name)
+		if err != nil && avd.IsMissingSDKError(err) {
+			a.post(func() {
+				a.bootstrapStage = "正在首次自动部署 Android 15 运行环境…"
+				a.bootstrapPct = 1
+				a.message = a.bootstrapStage
+				a.render()
+			})
+			bootErr := avd.BootstrapRuntime(ctx, "", func(stage string, pct int) {
+				a.post(func() {
+					if ctx.Err() == nil {
+						a.bootstrapStage = stage
+						a.bootstrapPct = pct
+						a.message = fmt.Sprintf("首次初始化 %s：%s (%d%%)", name, stage, pct)
+						a.render()
+					}
+				})
+			})
+			a.post(func() {
+				a.bootstrapStage = ""
+				a.bootstrapPct = 0
+			})
+			if bootErr != nil {
+				err = bootErr
+			} else {
+				manager, err = selectedManager(name)
+			}
+		}
 		var instance avd.Instance
 		if err == nil {
 			instance, err = manager.StartWithProgress(ctx, func(percent int) {

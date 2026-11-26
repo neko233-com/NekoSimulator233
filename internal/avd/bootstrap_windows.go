@@ -17,6 +17,7 @@ import (
 const (
 	DefaultCommandLineToolsURL = "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"
 	DefaultPlatformToolsURL    = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
+	DefaultTemurinJDK17URL     = "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse"
 )
 
 // DefaultBootstrapSDKRoot returns the managed NekoSimulator233 Android SDK root
@@ -52,12 +53,18 @@ func BootstrapRuntime(ctx context.Context, sdkRoot string, notify func(stage str
 	if err := os.MkdirAll(sdkRoot, 0o755); err != nil {
 		return err
 	}
-	if _, err := sdkManagerJava(); err != nil {
-		return fmt.Errorf("未检测到 Java 17 运行时，请先运行 configure-jdk.ps1 或安装 JDK 17：%w", err)
-	}
 	report := func(stage string, pct int) {
 		if notify != nil {
 			notify(stage, pct)
+		}
+	}
+
+	if _, err := sdkManagerJava(); err != nil {
+		report("正在内置部署 Java 17 运行时…", 2)
+		if err := ensureManagedJDK17(ctx, func(p int) {
+			report("正在内置部署 Java 17 运行时…", 2+p*13/100)
+		}); err != nil {
+			return fmt.Errorf("部署内置 Java 17 失败：%w", err)
 		}
 	}
 
@@ -121,6 +128,95 @@ func hasAnySystemImage(sdkRoot string) bool {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func ensureManagedJDK17(ctx context.Context, progress func(percent int)) error {
+	local := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+	if local == "" {
+		local = filepath.Join(os.TempDir(), "NekoSimulator233-data")
+	}
+	jdkDir := filepath.Join(local, "NekoSimulator233-data", "runtime", "jdk")
+	if !nativeJava(filepath.Join(jdkDir, "bin", "java.exe")) {
+		if err := downloadAndExtractZipTopLevel(ctx, DefaultTemurinJDK17URL, jdkDir, progress); err != nil {
+			return err
+		}
+		if !nativeJava(filepath.Join(jdkDir, "bin", "java.exe")) {
+			return fmt.Errorf("解压后未找到 %s", filepath.Join(jdkDir, "bin", "java.exe"))
+		}
+	}
+	jdkHomeTxt := filepath.Join(local, "NekoSimulator233-data", "jdk-home.txt")
+	_ = os.MkdirAll(filepath.Dir(jdkHomeTxt), 0o755)
+	_ = os.WriteFile(jdkHomeTxt, []byte(jdkDir), 0o644)
+	return nil
+}
+
+func downloadAndExtractZipTopLevel(ctx context.Context, url, destDir string, progress func(percent int)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	cli := &http.Client{Timeout: 20 * time.Minute}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	tmp, err := os.CreateTemp("", "neko-jdk-*.zip")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	var downloaded int64
+	buf := make([]byte, 64*1024)
+	lastPct := -1
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := tmp.Write(buf[:n]); werr != nil {
+				tmp.Close()
+				return werr
+			}
+			downloaded += int64(n)
+			if resp.ContentLength > 0 && progress != nil {
+				pct := int(downloaded * 100 / resp.ContentLength)
+				if pct > 100 {
+					pct = 100
+				}
+				if pct != lastPct {
+					lastPct = pct
+					progress(pct)
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			tmp.Close()
+			return readErr
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	r, err := zip.OpenReader(tmpPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	prefix := ""
+	for _, f := range r.File {
+		name := strings.ReplaceAll(f.Name, "\\", "/")
+		if idx := strings.IndexByte(name, '/'); idx > 0 {
+			prefix = name[:idx+1]
+			break
+		}
+	}
+	return extractZip(tmpPath, destDir, prefix)
 }
 
 func writeStandardSDKAcceptLicenses(sdkRoot string) error {
