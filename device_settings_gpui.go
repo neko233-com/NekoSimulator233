@@ -58,7 +58,7 @@ func (a *app) openDeviceSettings(name string) {
 		}
 		res, _ := m.GetResources(ctx)
 		if res.Cores <= 0 {
-			res = avd.Resources{Cores: 4, RAMMiB: 4096}
+			res = avd.Resources{Cores: 2, RAMMiB: 4096}
 		}
 		disp, _ := m.GetDisplaySettings(ctx)
 		if disp.Width <= 0 {

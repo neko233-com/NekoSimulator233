@@ -131,6 +131,38 @@ func frameSignature(img *image.RGBA) uint64 {
 	return hash
 }
 
+// downsampleRGBA scales src down to targetW x targetH into a reusable dst
+// buffer using fast nearest-neighbor sampling when src is larger than the
+// viewer viewport, cutting JPEG encode and GPUI decode cost by ~4x.
+func downsampleRGBA(src, dst *image.RGBA, targetW, targetH int) *image.RGBA {
+	if src == nil || targetW <= 0 || targetH <= 0 {
+		return src
+	}
+	sb := src.Bounds()
+	sw, sh := sb.Dx(), sb.Dy()
+	if sw <= targetW || sh <= targetH {
+		return src
+	}
+	if dst == nil || dst.Bounds().Dx() != targetW || dst.Bounds().Dy() != targetH {
+		dst = image.NewRGBA(image.Rect(0, 0, targetW, targetH))
+	}
+	for dy := 0; dy < targetH; dy++ {
+		sy := (dy * sh) / targetH
+		srcRow := src.Pix[(sy+sb.Min.Y-src.Rect.Min.Y)*src.Stride:]
+		dstRow := dst.Pix[dy*dst.Stride:]
+		for dx := 0; dx < targetW; dx++ {
+			sx := (dx * sw) / targetW
+			si := (sx + sb.Min.X - src.Rect.Min.X) * 4
+			di := dx * 4
+			dstRow[di+0] = srcRow[si+0]
+			dstRow[di+1] = srcRow[si+1]
+			dstRow[di+2] = srcRow[si+2]
+			dstRow[di+3] = srcRow[si+3]
+		}
+	}
+	return dst
+}
+
 // encodeRGBAAsFastJPEGInto encodes an *image.RGBA into a reusable buffer as a
 // fast Quality-80 JPEG, keeping payload small (~100-250 KB) and allocations zero.
 func encodeRGBAAsFastJPEGInto(buf *bytes.Buffer, img *image.RGBA) []byte {

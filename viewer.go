@@ -133,7 +133,7 @@ func openEmulatorViewer(a *app, name string, source display.Session, bindingsPat
 		macroSpeed:  1.0,
 		fpsStart:    time.Now(),
 	}
-	v.captureRate.Store(30)
+	v.captureRate.Store(60)
 
 	if m, err := selectedManager(name); err == nil {
 		if cfg, err := m.InstanceSettings(); err == nil {
@@ -300,8 +300,9 @@ func (v *emulatorViewer) runCaptureAndInput() {
 	defer ticker.Stop()
 
 	var buf *image.RGBA
+	var scaledBuf *image.RGBA
 	var jpegBuf bytes.Buffer
-	jpegBuf.Grow(256 * 1024)
+	jpegBuf.Grow(128 * 1024)
 	var lastSig uint64
 	for {
 		select {
@@ -310,7 +311,7 @@ func (v *emulatorViewer) runCaptureAndInput() {
 		case <-v.rateChanged:
 			r := int(v.captureRate.Load())
 			if r <= 0 {
-				r = 30
+				r = 60
 			}
 			ticker.Reset(time.Second / time.Duration(r))
 		case <-ticker.C:
@@ -331,7 +332,20 @@ func (v *emulatorViewer) runCaptureAndInput() {
 				continue
 			}
 			lastSig = sig
-			jpgBytes := encodeRGBAAsFastJPEGInto(&jpegBuf, frame)
+			encImg := frame
+			vw, _ := v.viewportSize()
+			targetW := int(vw * 1.25)
+			if targetW < 540 {
+				targetW = 540
+			}
+			if fw > targetW && fw > 0 && fh > 0 {
+				targetH := (fh * targetW) / fw
+				if targetH > 0 {
+					scaledBuf = downsampleRGBA(frame, scaledBuf, targetW, targetH)
+					encImg = scaledBuf
+				}
+			}
+			jpgBytes := encodeRGBAAsFastJPEGInto(&jpegBuf, encImg)
 			if len(jpgBytes) == 0 {
 				continue
 			}
@@ -369,7 +383,9 @@ func (v *emulatorViewer) runCaptureAndInput() {
 				}
 				v.render()
 				if old != nil {
-					_ = old.Release(v.app.ctx)
+					go func(r *client.Resource) {
+						_ = r.Release(v.app.ctx)
+					}(old)
 				}
 			})
 			select {

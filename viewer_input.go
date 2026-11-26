@@ -21,6 +21,25 @@ func runViewerInput(done <-chan struct{}, events <-chan pointerEvent, input *vie
 		case <-done:
 			return
 		case ev := <-events:
+			if ev.kind == pointerMove {
+			coalesce:
+				for {
+					select {
+					case next := <-events:
+						if next.kind == pointerMove {
+							ev = next
+						} else {
+							if err := input.handle(ev); err != nil {
+								report(err)
+							}
+							ev = next
+							break coalesce
+						}
+					default:
+						break coalesce
+					}
+				}
+			}
 			if err := input.handle(ev); err != nil {
 				report(err)
 			}
