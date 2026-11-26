@@ -78,12 +78,20 @@ hardware_vulkan / vt_enabled
 ```
 真机回读（默认实例）：`cpu_exec_cap=4`、`memory_mib=2048`、`width=2560,height=1440,dpi=360`、`image_tag=google_apis_playstore`、`nat_network=true`、`shared_folder=...\NekoSimulator233-data\shared\NekoSimulator233`。
 
-## 5. 仍未对齐的解包项（按优先级）
-1. `setting.phone`：品牌/型号/IMEI/VDID 伪装。可用 emulator 启动属性注入，但需为每实例增加配置存储与 GUI。
-2. `root_mode`：需要 `-root` 启动参数与 AVD 配置，可能影响 Play 完整性。
-3. `frame_setting.vertical_sync` / `desired_framerate`：当前只能控制截图采样，不能控制 Android 合成帧率。
-4. `level.user.*`（cpu/gpu/memory 档位）：当前是裸 CPU/内存设置，没有“流畅/均衡/高性能”档位映射。
-5. `toolbar.shown_item` / `topmost_items`：MuMu 工具栏项可配置；Neko 工具栏固定。
-6. `keep_awake_policy` / `auto_mute_when_hidden`：休眠与静音策略未完整实现。
+## 5. 2026-11-26 REA 6.8.0 增量取证（MuMu 6.8.14.0，`D:\App\MuMu`）
 
-以上 1–3 属于可继续落地项；4–6 属于 UI/策略层增强。未实现项均如实记录在 `docs/mumu-parity-assessment.md`。
+使用本机 REA 6.8.0 对 MuMu 6.8.14.0 剩余核心控制模块进行只读 PE 导出分析，并读取 `MuMuManager.exe` 全量可写配置项与工具栏命令：
+
+- **`nemu-inputmanager.dll`**（74 导出，SHA-256 `8ea9175a69058d5c2c8f7bc79a636f83a17a7445b4ddd4586a28c73c0db69ffa`）：
+  - 操作录制与回放：`InitializeRecordCallbacks`、`PauseRecord`、`ResumeRecord`、`InitializeReplayCallbacks`、`PauseReplay`、`ResumeReplay`、`RestartReplay`、`MergeRecord`、`GetRecordInfo`、`GetRecordStatus` → Neko 落地为 `internal/macro` + 模拟器宏面板 + `neko_macro_*` MCP 工具。
+  - 多开同步：`PauseSync` 等 → Neko 落地为 `internal/syncctl` + 模拟器多开同步器。
+  - 相对鼠标与坐标映射：`ConvertWindowPositionToAndroid`、`OnWindowsWmRelativeInputEvent`、`OnJoystickEvent`。
+- **`nemu-keymapmanager.dll`**（37 导出，SHA-256 `afbd60479fd02a37a67d65b26116a66255afa8a30d00c39e9f9e80d6c262bda7`）：
+  - 键位方案与智能配置：`LoadKeymapConfigAndInfo`、`SaveKeymapConfigAndInfo`、`LoadJoystickConfigAndInfo`、`MacroKey*` → Neko 落地为多方案键位编辑器、WASD 摇杆、射击/MOBA 预设模板与 `neko_keymap_*`。
+- **`nemu-vcontrolmanager.dll`**（90 导出，SHA-256 `6bb101291221b4e401498e3260847404c14d3c6712f0cd6daaae48fc3de758cb`）：
+  - 顶部多应用标签栏核心机制：`getCurrentAppSync`、`isAppAlive`、`onFocusOnApp`、`onExitApp`、`closeTaskAsync`、`lunchApp` → Neko 通过 ADB 任务查询与切换落地为模拟器窗口（图 2）顶部 Chrome 风格多应用标签栏。
+  - 设备控制：`clearAppData`、`clearDisk`、`getEmulatorDiskData`、`getRootStateSync`、`onClipboard`、`muteVolume`、`disableAudio`、`goBackAsync`、`goHomeAsync`、`installApkAsync` → 全部落地到 `internal/avd`、GPUI 界面与 `neko-mcp`。
+- **`MuMuManager.exe` 全量命令与设置键**：
+  - 实例管理：`create`、`clone`、`rename`、`delete`、`import`、`export`、`info`、`sort`、`shortcut`、`simulation`（`android_id`/`mac_address`/`imei`）。
+  - 工具栏：`rotate`、`go_home`、`go_back`、`top_most`、`fullscreen`、`shake`、`screenshot`、`volume_up`、`volume_down`、`volume_mute`、`location`、`gyro`、`downcpu`。
+  - 全部设置键（性能档位、分辨率预设、帧率/VSync/显存、Root、只读系统盘、亮度、右键返回、窗口记忆、自动静音等）均已映射至 `avd.InstanceSettings` 与 GPUI 多页签设备设置弹窗。
