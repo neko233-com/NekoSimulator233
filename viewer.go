@@ -195,6 +195,9 @@ func openEmulatorViewer(a *app, name string, source display.Session, bindingsPat
 	}
 	win.OnResized(func(_ context.Context, sz client.WindowSize) error {
 		v.viewW, v.viewH = sz.Width, sz.Height
+		if v.width > 0 && v.height > 0 {
+			go setWindowAspectByTitle(v.title, v.width, v.height, v.chromeHeight(), true)
+		}
 		v.render()
 		return nil
 	})
