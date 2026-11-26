@@ -202,7 +202,7 @@ func (m Manager) ensureWithImagePolicy(requestedAPI int, requirePlay bool) error
 		}
 		return err
 	}
-	settings := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\n%s\nhw.cpu.arch=x86_64\nhw.cpu.ncore=4\nhw.ramSize=2048\nhw.lcd.width=720\nhw.lcd.height=1280\nhw.lcd.density=240\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=6G\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator, imageTagConfig(imageTag))
+	settings := fmt.Sprintf("AvdId=%s\navd.ini.displayname=%s\nabi.type=x86_64\nimage.sysdir.1=%s%c\n%s\nhw.cpu.arch=x86_64\nhw.cpu.ncore=2\nhw.ramSize=4096\nhw.lcd.width=1080\nhw.lcd.height=1920\nhw.lcd.density=480\nhw.gpu.enabled=yes\nhw.gpu.mode=host\nhw.keyboard=yes\ndisk.dataPartition.size=16G\nfastboot.forceColdBoot=yes\nshowDeviceFrame=no\n", m.Name, m.Name, imagePath, os.PathSeparator, imageTagConfig(imageTag))
 	if err := writeNew(config, settings); err != nil {
 		return fmt.Errorf("创建实例配置失败：%w", err)
 	}

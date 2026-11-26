@@ -251,6 +251,7 @@ func newServer(s *Service) *mcp.Server {
 	mcp.AddTool(server, ro("neko_audio_latency", "Read AudioFlinger output threads and its measured getLatency() statistics (diagnostic of the guest audio path, not speaker-to-mic latency)."), s.audioLatency)
 	mcp.AddTool(server, rw("neko_set_mute", "Mute or unmute the guest STREAM_MUSIC (used by the viewer's hidden-window mute policy)."), s.setMute)
 	mcp.AddTool(server, rw("neko_set_volume", "Set guest STREAM_MUSIC volume index 0..15."), s.setVolume)
+	registerParityTools(server, s)
 	return server
 }
 

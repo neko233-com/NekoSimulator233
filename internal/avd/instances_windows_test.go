@@ -87,7 +87,7 @@ func TestIndependentInstanceCreationAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := beta.GetResources(ctx)
-	if err != nil || got != (Resources{Cores: 4, RAMMiB: 2048}) {
+	if err != nil || got != (Resources{Cores: 2, RAMMiB: 4096}) {
 		t.Fatalf("settings leaked to another instance: %+v, %v", got, err)
 	}
 	items, err := m.ListInstances(ctx)

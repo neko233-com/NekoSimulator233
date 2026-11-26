@@ -108,7 +108,7 @@ func TestMCPSelectsAndIsolatesIndependentInstances(t *testing.T) {
 		}
 		return values
 	}
-	if got := getResources(); got != (avd.Resources{Cores: 4, RAMMiB: 2048}) {
+	if got := getResources(); got != (avd.Resources{Cores: 2, RAMMiB: 4096}) {
 		t.Fatalf("default inherited another instance's settings: %+v", got)
 	}
 	call("neko_select_instance", map[string]any{"name": "alpha"}, false)

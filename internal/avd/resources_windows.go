@@ -62,7 +62,7 @@ func resourcesOverride(dir string) (*Resources, error) {
 // GetResources reads the override or the existing AVD configuration without
 // initializing an instance. Lifecycle locking coordinates with start/import.
 func (m Manager) GetResources(ctx context.Context) (Resources, error) {
-	defaults := Resources{Cores: 4, RAMMiB: 2048}
+	defaults := Resources{Cores: 2, RAMMiB: 4096}
 	unlock, err := m.lockLifecycle(ctx, true)
 	if err != nil {
 		return Resources{}, err

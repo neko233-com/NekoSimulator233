@@ -1,7 +1,6 @@
 package com.neko233.launcher;
 
 import android.app.Activity;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -9,44 +8,52 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
+import android.widget.EditText;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * Neko home screen for the Android emulator. Styled like a PC-emulator
- * launcher: live wallpaper, real app icons, a search bar, a game-center area
- * that opens the installed app store / TapTap, and a dock.
- *
- * The entire UI is built in code so the APK needs no resource-compiler inputs.
+ * Pure ad-free Neko home screen for Android.
+ * Zero ad banners, zero discovery feeds, zero promotional red dots.
  */
 public class LauncherActivity extends Activity {
 
     private static final int WHITE = Color.parseColor("#FFFFFFFF");
-    private static final int MUTED = Color.parseColor("#D0DCF0");
-    private static final int CARD = Color.parseColor("#2A000000");
-    private static final int ACCENT = Color.parseColor("#4FB3FF");
+    private static final int MUTED = Color.parseColor("#C8D4E8");
+    private static final int CARD = Color.parseColor("#38121926");
+    private static final int DOCK_BG = Color.parseColor("#550E1522");
+    private static final int ACCENT = Color.parseColor("#2B7DE9");
 
     private PackageManager pm;
-    private List<ResolveInfo> apps;
+    private List<ResolveInfo> allApps = new ArrayList<>();
+    private List<ResolveInfo> filteredApps = new ArrayList<>();
+    private BaseAdapter gridAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         pm = getPackageManager();
-        apps = loadApps();
+        allApps = loadApps();
+        filteredApps = new ArrayList<>(allApps);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN);
 
         LinearLayout root = new LinearLayout(this);
@@ -55,20 +62,33 @@ public class LauncherActivity extends Activity {
         if (wallpaper != null) {
             root.setBackground(wallpaper);
         } else {
-            root.setBackgroundColor(Color.parseColor("#0B1B39"));
+            GradientDrawable bg = new GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    new int[]{Color.parseColor("#0B162C"), Color.parseColor("#132A4A"), Color.parseColor("#0A1222")}
+            );
+            root.setBackground(bg);
         }
-        root.setPadding(48, 28, 48, 28);
+        root.setPadding(44, 28, 44, 24);
 
         root.addView(header());
-        root.addView(searchBar());
-        root.addView(featureRow());
+        root.addView(localSearchBar());
         root.addView(appGrid());
+
         LinearLayout dock = dock();
         LinearLayout.LayoutParams dockParams =
-                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        dockParams.topMargin = 14;
         dockParams.gravity = Gravity.BOTTOM;
         root.addView(dock, dockParams);
+
         setContentView(root);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        allApps = loadApps();
+        filterApps("");
     }
 
     @Override
@@ -76,7 +96,6 @@ public class LauncherActivity extends Activity {
         // Home screens do not close on Back.
     }
 
-    /** Real wallpaper from Android, never a hard-coded letter. */
     private Drawable loadWallpaper() {
         try {
             return android.app.WallpaperManager.getInstance(this).getDrawable();
@@ -96,11 +115,27 @@ public class LauncherActivity extends Activity {
             result.add(info);
         }
         Collections.sort(result, new Comparator<ResolveInfo>() {
-            @Override public int compare(ResolveInfo a, ResolveInfo b) {
+            @Override
+            public int compare(ResolveInfo a, ResolveInfo b) {
                 return label(a).compareToIgnoreCase(label(b));
             }
         });
         return result;
+    }
+
+    private void filterApps(String query) {
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        filteredApps.clear();
+        for (ResolveInfo info : allApps) {
+            if (q.isEmpty()
+                    || label(info).toLowerCase(Locale.ROOT).contains(q)
+                    || info.activityInfo.packageName.toLowerCase(Locale.ROOT).contains(q)) {
+                filteredApps.add(info);
+            }
+        }
+        if (gridAdapter != null) {
+            gridAdapter.notifyDataSetChanged();
+        }
     }
 
     private String label(ResolveInfo info) {
@@ -108,79 +143,139 @@ public class LauncherActivity extends Activity {
         return c == null ? info.activityInfo.name : c.toString();
     }
 
+    private GradientDrawable rounded(int fillColor, float radiusPx) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fillColor);
+        d.setCornerRadius(radiusPx);
+        return d;
+    }
+
     private View header() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = text("NekoSimulator233", 30, WHITE, true);
-        brand.setShadowLayer(6, 2, 2, Color.parseColor("#AA000000"));
-        row.addView(brand, new LinearLayout.LayoutParams(0, 84, 1f));
-        TextView clock = text("桌面", 18, MUTED, false);
+
+        TextView brand = text("NekoSimulator233", 24, WHITE, true);
+        brand.setShadowLayer(6, 1, 2, Color.parseColor("#99000000"));
+        row.addView(brand, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        String now = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
+        TextView clock = text(now, 18, MUTED, false);
         clock.setGravity(Gravity.END);
-        row.addView(clock, new LinearLayout.LayoutParams(0, 84, 1f));
+        row.addView(clock, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return row;
     }
 
-    private View searchBar() {
-        TextView search = text("  搜索应用、游戏…", 18, WHITE, false);
-        search.setBackgroundColor(CARD);
-        search.setGravity(Gravity.CENTER_VERTICAL);
-        search.setOnClickListener(v -> {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=game"));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try { startActivity(intent); } catch (Exception ignored) { }
+    private View localSearchBar() {
+        EditText search = new EditText(this);
+        search.setHint("搜索本机已安装应用…");
+        search.setHintTextColor(MUTED);
+        search.setTextColor(WHITE);
+        search.setTextSize(16);
+        search.setSingleLine(true);
+        search.setPadding(28, 16, 28, 16);
+        search.setBackground(rounded(CARD, 20));
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                filterApps(s == null ? "" : s.toString());
+            }
+            @Override public void afterTextChanged(Editable s) {}
         });
         LinearLayout.LayoutParams p =
-                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 74);
-        p.topMargin = 10;
-        p.bottomMargin = 14;
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.topMargin = 14;
+        p.bottomMargin = 18;
         search.setLayoutParams(p);
         return search;
     }
 
-    private View featureRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(card("游戏中心", "TapTap · 精选手游", firstInstalled("com.taptap", "com.taptap.global", "com.android.vending")));
-        row.addView(card("每日新发现", "Google Play 热门推荐", "com.android.vending"));
-        row.addView(card("系统设置", "分辨率 · 键位 · 应用", "com.android.settings"));
-        return row;
+    private View appGrid() {
+        GridView grid = new GridView(this);
+        grid.setNumColumns(5);
+        grid.setVerticalSpacing(16);
+        grid.setHorizontalSpacing(14);
+        gridAdapter = new BaseAdapter() {
+            @Override public int getCount() { return filteredApps.size(); }
+            @Override public Object getItem(int i) { return filteredApps.get(i); }
+            @Override public long getItemId(int i) { return i; }
+            @Override public View getView(int i, View reuse, ViewGroup parent) {
+                final ResolveInfo info = filteredApps.get(i);
+                LinearLayout tile = new LinearLayout(LauncherActivity.this);
+                tile.setOrientation(LinearLayout.VERTICAL);
+                tile.setGravity(Gravity.CENTER);
+                tile.setBackground(rounded(CARD, 18));
+                tile.setPadding(10, 14, 10, 12);
+
+                ImageView icon = new ImageView(LauncherActivity.this);
+                Drawable d = info.loadIcon(pm);
+                if (d != null) icon.setImageDrawable(d);
+                icon.setAdjustViewBounds(true);
+                icon.setMaxWidth(84);
+                icon.setMaxHeight(84);
+                tile.addView(icon, new LinearLayout.LayoutParams(84, 84));
+
+                TextView label = text(label(info), 13, WHITE, false);
+                label.setMaxLines(1);
+                label.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = 8;
+                tile.addView(label, lp);
+
+                tile.setOnClickListener(v -> {
+                    Intent intent = pm.getLaunchIntentForPackage(info.activityInfo.packageName);
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(intent);
+                    }
+                });
+                return tile;
+            }
+        };
+        grid.setAdapter(gridAdapter);
+        LinearLayout.LayoutParams p =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        grid.setLayoutParams(p);
+        return grid;
     }
 
-    /** Picks the first installed package from candidates, falling back to a store. */
-    private String firstInstalled(String... packages) {
-        for (String pkg : packages) {
-            try {
-                pm.getPackageInfo(pkg, 0);
-                return pkg;
-            } catch (Exception ignored) { }
+    private LinearLayout dock() {
+        LinearLayout dock = new LinearLayout(this);
+        dock.setOrientation(LinearLayout.HORIZONTAL);
+        dock.setGravity(Gravity.CENTER);
+        dock.setBackground(rounded(DOCK_BG, 24));
+        dock.setPadding(16, 12, 16, 12);
+        for (String pkg : new String[]{"com.android.settings", "com.android.documentsui", "com.android.chrome"}) {
+            dock.addView(dockIcon(pkg));
         }
-        return "com.android.vending";
+        return dock;
     }
 
-    private View card(String title, String subtitle, final String pkg) {
-        LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.HORIZONTAL);
-        c.setBackgroundColor(CARD);
-        c.setPadding(20, 16, 20, 16);
-        c.setGravity(Gravity.CENTER_VERTICAL);
+    private View dockIcon(String pkg) {
+        LinearLayout b = new LinearLayout(this);
+        b.setOrientation(LinearLayout.HORIZONTAL);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(rounded(ACCENT, 16));
+        b.setPadding(16, 10, 16, 10);
+
         ImageView icon = new ImageView(this);
         Drawable d = safeIcon(pkg);
         if (d != null) icon.setImageDrawable(d);
         icon.setAdjustViewBounds(true);
-        icon.setMaxWidth(72);
-        icon.setMaxHeight(72);
-        c.addView(icon, new LinearLayout.LayoutParams(72, 72));
-        LinearLayout labels = new LinearLayout(this);
-        labels.setOrientation(LinearLayout.VERTICAL);
-        labels.addView(text(title, 22, WHITE, true));
-        labels.addView(text(subtitle, 14, MUTED, false));
-        c.addView(labels, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        c.setOnClickListener(v -> launch(pkg));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, 150, 1f);
-        p.setMargins(0, 0, 14, 14);
-        c.setLayoutParams(p);
-        return c;
+        icon.setMaxWidth(44);
+        icon.setMaxHeight(44);
+        b.addView(icon, new LinearLayout.LayoutParams(44, 44));
+
+        TextView lbl = text(labelForPkg(pkg), 14, WHITE, true);
+        lbl.setPadding(10, 0, 0, 0);
+        b.addView(lbl);
+
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        p.setMargins(10, 0, 10, 0);
+        b.setLayoutParams(p);
+        b.setOnClickListener(v -> launch(pkg));
+        return b;
     }
 
     private Drawable safeIcon(String pkg) {
@@ -191,81 +286,6 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private View appGrid() {
-        GridView grid = new GridView(this);
-        grid.setNumColumns(7);
-        grid.setVerticalSpacing(18);
-        grid.setHorizontalSpacing(10);
-        grid.setAdapter(new BaseAdapter() {
-            @Override public int getCount() { return apps.size(); }
-            @Override public Object getItem(int i) { return apps.get(i); }
-            @Override public long getItemId(int i) { return i; }
-            @Override public View getView(int i, View reuse, ViewGroup parent) {
-                final ResolveInfo info = apps.get(i);
-                LinearLayout tile = new LinearLayout(LauncherActivity.this);
-                tile.setOrientation(LinearLayout.VERTICAL);
-                tile.setGravity(Gravity.CENTER);
-                tile.setBackgroundColor(CARD);
-                tile.setPadding(6, 12, 6, 10);
-                ImageView icon = new ImageView(LauncherActivity.this);
-                Drawable d = info.loadIcon(pm);
-                if (d != null) icon.setImageDrawable(d);
-                icon.setAdjustViewBounds(true);
-                icon.setMaxWidth(86);
-                icon.setMaxHeight(86);
-                tile.addView(icon, new LinearLayout.LayoutParams(86, 86));
-                TextView label = text(label(info), 14, WHITE, false);
-                label.setMaxLines(1);
-                tile.addView(label);
-                tile.setOnClickListener(v -> {
-                    Intent intent = pm.getLaunchIntentForPackage(info.activityInfo.packageName);
-                    if (intent != null) {
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(intent);
-                    }
-                });
-                return tile;
-            }
-        });
-        LinearLayout.LayoutParams p =
-                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 4f);
-        p.topMargin = 6;
-        grid.setLayoutParams(p);
-        return grid;
-    }
-
-    private LinearLayout dock() {
-        LinearLayout dock = new LinearLayout(this);
-        dock.setOrientation(LinearLayout.HORIZONTAL);
-        dock.setGravity(Gravity.CENTER);
-        dock.setBackgroundColor(CARD);
-        dock.setPadding(16, 14, 16, 14);
-        for (String pkg : new String[]{"com.android.settings", "com.android.vending", "com.android.chrome"}) {
-            dock.addView(dockIcon(pkg));
-        }
-        return dock;
-    }
-
-    private View dockIcon(String pkg) {
-        LinearLayout b = new LinearLayout(this);
-        b.setOrientation(LinearLayout.HORIZONTAL);
-        b.setGravity(Gravity.CENTER);
-        b.setBackgroundColor(ACCENT);
-        ImageView icon = new ImageView(this);
-        Drawable d = safeIcon(pkg);
-        if (d != null) icon.setImageDrawable(d);
-        icon.setAdjustViewBounds(true);
-        icon.setMaxWidth(56);
-        icon.setMaxHeight(56);
-        b.addView(icon, new LinearLayout.LayoutParams(56, 56));
-        b.addView(text(labelForPkg(pkg), 16, WHITE, true));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(210, 72);
-        p.setMargins(18, 0, 18, 0);
-        b.setLayoutParams(p);
-        b.setOnClickListener(v -> launch(pkg));
-        return b;
-    }
-
     private String labelForPkg(String pkg) {
         try {
             ApplicationInfo app = pm.getApplicationInfo(pkg, 0);
@@ -273,7 +293,7 @@ public class LauncherActivity extends Activity {
             return c == null ? pkg : c.toString();
         } catch (Exception ignored) {
             if ("com.android.chrome".equals(pkg)) return "浏览器";
-            if ("com.android.vending".equals(pkg)) return "商店";
+            if ("com.android.documentsui".equals(pkg)) return "文件";
             return "设置";
         }
     }

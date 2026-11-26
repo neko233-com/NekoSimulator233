@@ -15,6 +15,7 @@ import (
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/desktopctl"
 	"github.com/neko233-com/NekoSimulator233/internal/frameprobe"
+	"github.com/neko233-com/NekoSimulator233/internal/mcpproxy"
 	"github.com/neko233-com/NekoSimulator233/internal/vulkan"
 )
 
@@ -75,6 +76,33 @@ func main() {
 			fmt.Fprintln(os.Stderr, "agent-desktop proxy disabled:", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "agent-desktop proxy: %d tools registered\n", count)
+		}
+	}
+	if enabled, ok := os.LookupEnv("NEKO_REA_PROXY"); ok && enabled != "0" && enabled != "" {
+		if up, found := mcpproxy.DetectREAMCP(); found {
+			if count, err := mcpproxy.Register(context.Background(), server, up, 20*time.Second); err != nil {
+				fmt.Fprintln(os.Stderr, "rea-mcp proxy disabled:", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "rea-mcp proxy: %d tools registered\n", count)
+			}
+		}
+	}
+	if enabled, ok := os.LookupEnv("NEKO_GHIDRA_PROXY"); ok && enabled != "0" && enabled != "" {
+		if up, _, found := mcpproxy.DetectGhidraMCP(); found {
+			if count, err := mcpproxy.Register(context.Background(), server, up, 20*time.Second); err != nil {
+				fmt.Fprintln(os.Stderr, "ghidra-mcp proxy disabled:", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "ghidra-mcp proxy: %d tools registered\n", count)
+			}
+		}
+	}
+	if enabled, ok := os.LookupEnv("NEKO_CRAFT_PROXY"); ok && enabled != "0" && enabled != "" {
+		if up, found := mcpproxy.DetectCraftAnything(); found {
+			if count, err := mcpproxy.Register(context.Background(), server, up, 20*time.Second); err != nil {
+				fmt.Fprintln(os.Stderr, "craft-anything proxy disabled:", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "craft-anything proxy: %d tools registered\n", count)
+			}
 		}
 	}
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
