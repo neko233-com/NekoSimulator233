@@ -633,7 +633,11 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 		}
 	}
 	if err == nil {
-		_ = m.SyncHostTimeAndLocale(ctx, ready)
+		go func(inst Instance) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = m.SyncHostTimeAndLocale(syncCtx, inst)
+		}(ready)
 		m.scheduleTapTap(ready)
 	}
 	return ready, err
