@@ -124,15 +124,19 @@ func TestParseRunningAppsFiltersLauncherAndSystem(t *testing.T) {
   * Recent #1: Task{id=2 A=10124:com.example.vpn233 realActivity=com.example.vpn233/.Main}
   * Recent #2: Task{id=3 A=10125:com.tencent.tmgp.game realActivity=com.tencent.tmgp.game/.GameActivity}
   * Recent #3: Task{id=4 A=1000:com.android.systemui}
+  * Recent #4: Task{id=5 A=10149:com.android.camera.CameraActivity realActivity={com.android.camera2/com.android.camera.CameraActivity}}
 `
 	apps := ParseRunningApps(winDump, recentsDump)
-	if len(apps) != 2 {
-		t.Fatalf("expected 2 non-launcher apps, got %+v", apps)
+	if len(apps) != 3 {
+		t.Fatalf("expected 3 non-launcher apps, got %+v", apps)
 	}
 	if apps[0].Package != "com.example.vpn233" || !apps[0].Foreground {
 		t.Fatalf("unexpected first app: %+v", apps[0])
 	}
 	if apps[1].Package != "com.tencent.tmgp.game" || apps[1].Foreground {
 		t.Fatalf("unexpected second app: %+v", apps[1])
+	}
+	if apps[2].Package != "com.android.camera2" || apps[2].Label != "相机" || apps[2].Component != "com.android.camera2/com.android.camera.CameraActivity" {
+		t.Fatalf("unexpected braced camera2 app: %+v", apps[2])
 	}
 }

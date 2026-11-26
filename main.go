@@ -85,6 +85,7 @@ type app struct {
 	bootstrapStage  string
 	bootstrapPct    int
 	ecosystem       mcpproxy.EcosystemReport
+	ecoLoaded       bool
 	tray            *trayController
 
 	// Event handler IDs for GPUI inputs
@@ -261,25 +262,42 @@ func (a *app) runLoop() error {
 		}
 	}()
 
+	handleBatch := func(batch []*client.Event) (bool, error) {
+		for _, ev := range batch {
+			if ev.GetWindowClosed() != nil && a.win != nil && ev.GetWindow().GetId() == a.win.Handle().GetId() {
+				a.closeAllViewers()
+				return true, a.cli.Quit(a.ctx)
+			}
+			if err := a.cli.Dispatch(a.ctx, ev); err != nil {
+				return true, err
+			}
+			a.routeEvent(ev)
+		}
+		return false, nil
+	}
+
 	for {
+		// Always drain interactive user events before background UI updates.
+		select {
+		case batch := <-evCh:
+			if quit, err := handleBatch(batch); quit || err != nil {
+				return err
+			}
+			continue
+		default:
+		}
+
 		select {
 		case <-a.ctx.Done():
 			return nil
 		case err := <-errCh:
 			return err
+		case batch := <-evCh:
+			if quit, err := handleBatch(batch); quit || err != nil {
+				return err
+			}
 		case fn := <-a.uiQueue:
 			fn()
-		case batch := <-evCh:
-			for _, ev := range batch {
-				if ev.GetWindowClosed() != nil && a.win != nil && ev.GetWindow().GetId() == a.win.Handle().GetId() {
-					a.closeAllViewers()
-					return a.cli.Quit(a.ctx)
-				}
-				if err := a.cli.Dispatch(a.ctx, ev); err != nil {
-					return err
-				}
-				a.routeEvent(ev)
-			}
 		}
 	}
 }
@@ -360,10 +378,15 @@ func (a *app) refresh() {
 	a.message = "正在刷新本地设备列表…"
 	a.render()
 	go func() {
-		if exe, err := os.Executable(); err == nil {
-			_ = avd.PrepareBundledRuntime(context.Background(), filepath.Join(filepath.Dir(exe), "android-runtime.zip"), os.Getenv("LOCALAPPDATA"))
+		var eco mcpproxy.EcosystemReport
+		needEco := !a.ecoLoaded
+		if needEco {
+			if exe, err := os.Executable(); err == nil {
+				_ = avd.PrepareBundledRuntime(context.Background(), filepath.Join(filepath.Dir(exe), "android-runtime.zip"), os.Getenv("LOCALAPPDATA"))
+			}
+			eco = mcpproxy.DetectEcosystem()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 		var items []avd.InstanceSummary
 		var err error
@@ -373,10 +396,12 @@ func (a *app) refresh() {
 			home, _ := avd.LocalAVDHome()
 			items, err = avd.ListLocalInstances(ctx, home)
 		}
-		eco := mcpproxy.DetectEcosystem()
 		a.post(func() {
 			a.busy = false
-			a.ecosystem = eco
+			if needEco {
+				a.ecosystem = eco
+				a.ecoLoaded = true
+			}
 			if err != nil {
 				a.message = "读取设备列表失败：" + err.Error()
 			} else {

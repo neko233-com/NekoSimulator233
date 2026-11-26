@@ -63,6 +63,9 @@ type emulatorViewer struct {
 	title         string
 	lastDragClick time.Time
 	serial        string
+	sdkRoot       string
+	avdHome       string
+	renderPending atomic.Bool
 	win          *client.Window
 	source       display.Session
 	frameRes     *client.Resource
@@ -137,6 +140,8 @@ func openEmulatorViewer(a *app, name string, source display.Session, bindingsPat
 	v.captureRate.Store(60)
 
 	if m, err := selectedManager(name); err == nil {
+		v.sdkRoot = m.SDK
+		v.avdHome = m.Home
 		if cfg, err := m.InstanceSettings(); err == nil {
 			v.settings = cfg
 			if cfg.FPSLimit > 0 && cfg.FPSLimit <= 120 {
@@ -172,10 +177,17 @@ func openEmulatorViewer(a *app, name string, source display.Session, bindingsPat
 		return nil
 	})
 
+	wa := primaryWorkArea()
+	maxInitH := float32(wa.Height - 24)
+	if maxInitH < 520 {
+		maxInitH = 520
+	}
+	initH := min(float32(860), maxInitH)
+	initW := float32(math.Round(float64(initH-topBarHeight-bottomBarHeight) * 9.0 / 16.0))
 	geom, hasGeom := loadViewerGeometry(name)
-	w, h := float32(520), float32(880)
+	w, h := initW, initH
 	if hasGeom {
-		w, h = float32(geom.Width), float32(geom.Height)
+		w, h = float32(geom.Width), float32(min(geom.Height, int(maxInitH)))
 	}
 	v.viewW, v.viewH = w, h
 
@@ -316,6 +328,9 @@ func (v *emulatorViewer) runCaptureAndInput() {
 			}
 			ticker.Reset(time.Second / time.Duration(r))
 		case <-ticker.C:
+			if v.renderPending.Load() {
+				continue
+			}
 			frame, err := v.source.Capture(buf)
 			if err != nil {
 				if v.frameRes == nil {
@@ -350,23 +365,26 @@ func (v *emulatorViewer) runCaptureAndInput() {
 			if len(jpgBytes) == 0 {
 				continue
 			}
-			payload := make([]byte, len(jpgBytes))
-			copy(payload, jpgBytes)
-			ack := make(chan struct{})
-			v.app.post(func() {
-				defer close(ack)
-				select {
-				case <-v.done:
-					return
-				default:
-				}
-				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/jpeg", payload)
-				if upErr != nil {
-					if v.frameRes == nil {
+			// Upload resource on the background capture goroutine so the main UI
+			// event loop stays completely unblocked for instant click response.
+			res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/jpeg", jpgBytes)
+			if upErr != nil {
+				if v.frameRes == nil {
+					v.app.post(func() {
 						v.message = "画面上传失败：" + upErr.Error()
 						v.render()
-					}
+					})
+				}
+				continue
+			}
+			v.renderPending.Store(true)
+			v.app.post(func() {
+				defer v.renderPending.Store(false)
+				select {
+				case <-v.done:
+					go func(r *client.Resource) { _ = r.Release(v.app.ctx) }(res)
 					return
+				default:
 				}
 				old := v.frameRes
 				firstOrRotated := v.width == 0 || (fw > fh) != (v.width > v.height)
@@ -374,7 +392,7 @@ func (v *emulatorViewer) runCaptureAndInput() {
 				v.width, v.height = fw, fh
 				v.message = ""
 				if firstOrRotated {
-					setWindowAspectByTitle(v.title, fw, fh, v.chromeHeight(), true)
+					go setWindowAspectByTitle(v.title, fw, fh, v.chromeHeight(), true)
 				}
 				v.fpsFrames++
 				if elapsed := time.Since(v.fpsStart); elapsed >= time.Second {
@@ -389,29 +407,38 @@ func (v *emulatorViewer) runCaptureAndInput() {
 					}(old)
 				}
 			})
-			select {
-			case <-ack:
-			case <-v.done:
-				return
-			}
 		}
 	}
 }
 
+func (v *emulatorViewer) fastManager() (avd.Manager, avd.Instance, error) {
+	if v.sdkRoot != "" && v.serial != "" {
+		return avd.Manager{SDK: v.sdkRoot, Home: v.avdHome, Name: v.name},
+			avd.Instance{Name: v.name, Serial: v.serial}, nil
+	}
+	m, err := selectedManager(v.name)
+	if err != nil {
+		return avd.Manager{}, avd.Instance{}, err
+	}
+	v.sdkRoot = m.SDK
+	v.avdHome = m.Home
+	return m, avd.Instance{Name: v.name, Serial: v.serial}, nil
+}
+
 func (v *emulatorViewer) pollRunningApps() {
-	ticker := time.NewTicker(2500 * time.Millisecond)
+	ticker := time.NewTicker(2000 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-v.done:
 			return
 		case <-ticker.C:
-			m, err := selectedManager(v.name)
-			if err != nil {
+			m, inst, err := v.fastManager()
+			if err != nil || inst.Serial == "" {
 				continue
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			apps, err := m.ListRunningApps(ctx, avd.Instance{Serial: v.serial, Name: v.name})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			apps, err := m.ListRunningApps(ctx, inst)
 			cancel()
 			if err != nil {
 				continue
@@ -731,11 +758,7 @@ func (v *emulatorViewer) handleDroppedFiles(paths []string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		m, err := selectedManager(v.name)
-		var inst avd.Instance
-		if err == nil {
-			inst, err = m.Ready(ctx)
-		}
+		m, inst, err := v.fastManager()
 		if err == nil {
 			var apks []string
 			var others []string
@@ -784,27 +807,24 @@ func (v *emulatorViewer) saveScreenshot() {
 }
 
 func (v *emulatorViewer) runADBTask(label string, fn func(context.Context, avd.Manager, avd.Instance) error) {
-	v.message = label + "…"
-	v.render()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		m, err := selectedManager(v.name)
-		var inst avd.Instance
-		if err == nil {
-			inst, err = m.Ready(ctx)
-		}
+		m, inst, err := v.fastManager()
 		if err == nil {
 			err = fn(ctx, m, inst)
 		}
-		v.app.post(func() {
-			if err != nil {
+		if err != nil {
+			v.app.post(func() {
 				v.message = label + "失败：" + err.Error()
-			} else {
+				v.render()
+			})
+		} else if v.drawerOpen {
+			v.app.post(func() {
 				v.message = label + "完成"
-			}
-			v.render()
-		})
+				v.render()
+			})
+		}
 	}()
 }
 
@@ -866,13 +886,30 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 				labelText(appItem.Label, 12, colTextPrimary, active),
 			).Focusable(0).OnClick(v.click(func() {
 				v.activeAppPkg = appItem.Package
+				for i := range v.runningApps {
+					v.runningApps[i].Foreground = v.runningApps[i].Package == appItem.Package
+				}
+				v.render()
 				v.runADBTask("切换 "+appItem.Label, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
-					return m.LaunchApp(ctx, inst, appItem.Package)
+					return m.FocusOrLaunchApp(ctx, inst, appItem.Package, appItem.Component)
 				})
 			})).Style(&scene.Style{Cursor: scene.CursorPointer.Enum()}),
 			scene.Div(eid(), svgIcon(v.app.icons.Close, 11, colTextMuted)).
 				Focusable(0).
 				OnClick(v.click(func() {
+					wasFg := v.activeAppPkg == appItem.Package
+					filtered := v.runningApps[:0]
+					for _, x := range v.runningApps {
+						if x.Package != appItem.Package {
+							filtered = append(filtered, x)
+						}
+					}
+					v.runningApps = filtered
+					if wasFg {
+						v.activeAppPkg = ""
+						v.enqueue(pointerEvent{kind: navigate, action: display.Home})
+					}
+					v.render()
 					v.runADBTask("关闭 "+appItem.Label, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
 						return m.CloseApp(ctx, inst, appItem.Package)
 					})
@@ -1393,12 +1430,12 @@ func (v *emulatorViewer) buildAppsDrawer() *scene.Node {
 			labelText(fmt.Sprintf("已运行应用 %d 个 / 第三方包 %d 个", len(v.runningApps), len(v.installedApps)), 12, colTextPrimary, true),
 			pillButton("刷新应用列表", v.click(func() {
 				go func() {
-					m, err := selectedManager(v.name)
+					m, inst, err := v.fastManager()
 					if err != nil {
 						return
 					}
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					pkgs, _ := m.ListApps(ctx, avd.Instance{Serial: v.serial, Name: v.name})
+					pkgs, _ := m.ListApps(ctx, inst)
 					cancel()
 					v.app.post(func() {
 						v.installedApps = pkgs

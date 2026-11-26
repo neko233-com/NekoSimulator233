@@ -608,15 +608,15 @@ func (m Manager) TrimDisk(ctx context.Context, instance Instance) error {
 // Chrome-style top tab strip (MuMu Vcontrol::getCurrentAppSync parity).
 type RunningApp struct {
 	Package    string `json:"package"`
+	Component  string `json:"component,omitempty"`
 	Label      string `json:"label"`
 	Foreground bool   `json:"foreground"`
 }
 
 var (
-	reFocusedApp   = regexp.MustCompile(`mCurrentFocus=Window\{[^\}]*\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/`)
-	reResumedApp   = regexp.MustCompile(`mResumedActivity:.*?\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/`)
-	reRecentTask   = regexp.MustCompile(`A=\d+:([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)`)
-	reRecentComp   = regexp.MustCompile(`realActivity=([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/`)
+	reFocusedApp = regexp.MustCompile(`mCurrentFocus=Window\{[^\}]*\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/([A-Za-z0-9_.$]+)`)
+	reResumedApp = regexp.MustCompile(`mResumedActivity:.*?\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/([A-Za-z0-9_.$]+)`)
+	reRecentComp = regexp.MustCompile(`realActivity=\{?([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)/([A-Za-z0-9_.$]+)\}?`)
 )
 
 func isLauncherOrSystemPkg(pkg string) bool {
@@ -643,6 +643,9 @@ func shortAppLabel(pkg string) string {
 		"com.android.documentsui":        "文件管理",
 		"com.google.android.apps.photos": "相册",
 		"com.android.gallery3d":          "图库",
+		"com.android.camera2":            "相机",
+		"com.android.dialer":             "电话",
+		"com.google.android.apps.messaging": "短信",
 	}
 	if label, ok := known[pkg]; ok {
 		return label
@@ -661,52 +664,63 @@ func shortAppLabel(pkg string) string {
 // dumpsys activity/window output so the Emulator top tab bar mirrors MuMu.
 func ParseRunningApps(windowDump, recentsDump string) []RunningApp {
 	fg := ""
-	if m := reFocusedApp.FindStringSubmatch(windowDump); len(m) == 2 {
-		fg = m[1]
-	} else if m := reResumedApp.FindStringSubmatch(recentsDump); len(m) == 2 {
-		fg = m[1]
+	fgComp := ""
+	if m := reFocusedApp.FindStringSubmatch(windowDump); len(m) == 3 {
+		if !strings.Contains(strings.ToLower(m[2]), "fallbackhome") {
+			fg = m[1]
+			fgComp = m[1] + "/" + m[2]
+		}
+	} else if m := reResumedApp.FindStringSubmatch(recentsDump); len(m) == 3 {
+		if !strings.Contains(strings.ToLower(m[2]), "fallbackhome") {
+			fg = m[1]
+			fgComp = m[1] + "/" + m[2]
+		}
 	}
 	seen := map[string]bool{}
 	var apps []RunningApp
-	add := func(pkg string, isFg bool) {
-		if pkg == "" || isLauncherOrSystemPkg(pkg) || strings.Contains(strings.ToLower(pkg), "fallbackhome") || seen[pkg] {
+	add := func(pkg, comp string, isFg bool) {
+		if pkg == "" || isLauncherOrSystemPkg(pkg) || strings.Contains(strings.ToLower(pkg), "fallbackhome") || strings.Contains(strings.ToLower(comp), "fallbackhome") || seen[pkg] {
 			return
 		}
 		seen[pkg] = true
-		apps = append(apps, RunningApp{Package: pkg, Label: shortAppLabel(pkg), Foreground: isFg})
+		apps = append(apps, RunningApp{Package: pkg, Component: comp, Label: shortAppLabel(pkg), Foreground: isFg})
 	}
 	if fg != "" && !isLauncherOrSystemPkg(fg) {
-		add(fg, true)
+		add(fg, fgComp, true)
 	}
-	for _, re := range []*regexp.Regexp{reRecentTask, reRecentComp} {
-		for _, match := range re.FindAllStringSubmatch(recentsDump, -1) {
-			if len(match) == 2 {
-				add(match[1], match[1] == fg)
-			}
-			if len(apps) >= 8 {
-				break
-			}
+	for _, match := range reRecentComp.FindAllStringSubmatch(recentsDump, -1) {
+		if len(match) == 3 {
+			add(match[1], match[1]+"/"+match[2], match[1] == fg)
+		}
+		if len(apps) >= 8 {
+			break
 		}
 	}
 	return apps
 }
 
-// ListRunningApps queries the guest for open/recent apps shown as Emulator tabs.
+// ListRunningApps queries the guest for open/recent apps in one fast filtered ADB call.
 func (m Manager) ListRunningApps(ctx context.Context, instance Instance) ([]RunningApp, error) {
-	winOut, _ := m.adb(ctx, instance.Serial, "shell", "dumpsys", "window", "displays")
-	recOut, err := m.adb(ctx, instance.Serial, "shell", "dumpsys", "activity", "recents")
-	if err != nil && len(winOut) == 0 {
+	out, err := m.adb(ctx, instance.Serial, "shell", "sh", "-c",
+		"dumpsys window displays | grep -E 'mCurrentFocus|mFocusedApp'; echo '===NEKO_REC==='; dumpsys activity recents | grep -E 'realActivity=|mResumedActivity'")
+	if err != nil && len(out) == 0 {
 		return nil, err
 	}
-	return ParseRunningApps(string(winOut), string(recOut)), nil
+	parts := strings.SplitN(string(out), "===NEKO_REC===", 2)
+	winStr := parts[0]
+	recStr := ""
+	if len(parts) == 2 {
+		recStr = parts[1]
+	}
+	return ParseRunningApps(winStr, recStr), nil
 }
 
-// CloseApp stops a running Android application (MuMu tab close button / Vcontrol::closeTaskAsync).
+// CloseApp stops a running Android application via fast native C++ cmd activity.
 func (m Manager) CloseApp(ctx context.Context, instance Instance, pkg string) error {
 	if !packageName.MatchString(pkg) {
 		return errors.New("Android 包名无效")
 	}
-	_, err := m.adb(ctx, instance.Serial, "shell", "am", "force-stop", pkg)
+	_, err := m.adb(ctx, instance.Serial, "shell", "cmd", "activity", "force-stop", pkg)
 	return err
 }
 
@@ -773,23 +787,23 @@ func (m Manager) Shake(ctx context.Context, instance Instance) error {
 // RotateDisplay rotates the guest display between portrait (0) and landscape (1)
 // (MuMu tool rotate parity).
 func (m Manager) RotateDisplay(ctx context.Context, instance Instance, landscape bool) error {
-	_, _ = m.adb(ctx, instance.Serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0")
 	rot := "0"
 	if landscape {
 		rot = "1"
 	}
-	_, err := m.adb(ctx, instance.Serial, "shell", "settings", "put", "system", "user_rotation", rot)
+	_, err := m.adb(ctx, instance.Serial, "shell", "sh", "-c",
+		"cmd settings put system accelerometer_rotation 0 && cmd settings put system user_rotation "+rot)
 	return err
 }
 
-// SetBrightness updates the guest screen brightness from 0..100% (MuMu screen_brightness parity).
+// SetBrightness updates the guest screen brightness from 0..100% in a single native cmd call.
 func (m Manager) SetBrightness(ctx context.Context, instance Instance, percent int) error {
 	if percent < 0 || percent > 100 {
 		return errors.New("亮度百分比须为 0..100")
 	}
 	val := (percent * 255) / 100
-	_, _ = m.adb(ctx, instance.Serial, "shell", "settings", "put", "system", "screen_brightness_mode", "0")
-	_, err := m.adb(ctx, instance.Serial, "shell", "settings", "put", "system", "screen_brightness", strconv.Itoa(val))
+	_, err := m.adb(ctx, instance.Serial, "shell", "sh", "-c",
+		"cmd settings put system screen_brightness_mode 0 && cmd settings put system screen_brightness "+strconv.Itoa(val))
 	return err
 }
 

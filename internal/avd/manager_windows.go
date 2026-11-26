@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -405,7 +406,7 @@ func processRunning(pid uint32) (bool, error) {
 func (m Manager) adb(ctx context.Context, serial string, args ...string) ([]byte, error) {
 	args = append([]string{"-s", serial}, args...)
 	cmd := exec.CommandContext(ctx, filepath.Join(m.SDK, "platform-tools", "adb.exe"), args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	out, err := cmd.Output()
 	if err != nil {
 		return out, fmt.Errorf("ADB 命令失败：%w", err)
@@ -763,11 +764,40 @@ func (m Manager) ListApps(ctx context.Context, instance Instance) ([]string, err
 	return result, nil
 }
 
-func (m Manager) LaunchApp(ctx context.Context, instance Instance, name string) error {
-	if !packageName.MatchString(name) {
+var launcherCompCache sync.Map // map[string]string ("serial|pkg" -> "pkg/cls")
+
+func (m Manager) FocusOrLaunchApp(ctx context.Context, instance Instance, pkg, component string) error {
+	if !packageName.MatchString(pkg) {
 		return errors.New("Android 包名无效")
 	}
-	out, err := m.adb(ctx, instance.Serial, "shell", "monkey", "-p", name, "-c", "android.intent.category.LAUNCHER", "1")
+	comp := strings.TrimSpace(component)
+	cacheKey := instance.Serial + "|" + pkg
+	if comp == "" {
+		if cached, ok := launcherCompCache.Load(cacheKey); ok {
+			comp = cached.(string)
+		}
+	}
+	if comp == "" {
+		out, err := m.adb(ctx, instance.Serial, "shell", "cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", pkg)
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(out), "\r", "")), "\n")
+			if len(lines) > 0 {
+				cand := strings.TrimSpace(lines[len(lines)-1])
+				if strings.Contains(cand, "/") && !strings.Contains(cand, " ") {
+					comp = cand
+					launcherCompCache.Store(cacheKey, comp)
+				}
+			}
+		}
+	}
+	if comp != "" {
+		out, err := m.adb(ctx, instance.Serial, "shell", "cmd", "activity", "start-activity", "-f", "0x10200000", comp)
+		if err == nil && !strings.Contains(string(out), "Error:") && !strings.Contains(string(out), "Exception") {
+			return nil
+		}
+		launcherCompCache.Delete(cacheKey)
+	}
+	out, err := m.adb(ctx, instance.Serial, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
 	if err != nil {
 		return err
 	}
@@ -775,6 +805,10 @@ func (m Manager) LaunchApp(ctx context.Context, instance Instance, name string) 
 		return errors.New("应用没有可启动的入口，或启动失败")
 	}
 	return nil
+}
+
+func (m Manager) LaunchApp(ctx context.Context, instance Instance, name string) error {
+	return m.FocusOrLaunchApp(ctx, instance, name, "")
 }
 
 // InstallAPK uses the SDK adb client directly; the local path is not sent to a

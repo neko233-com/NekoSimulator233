@@ -72,8 +72,9 @@ func windowOverhead(hwnd uintptr, chromeLogicalH int) (extraW, extraH int32) {
 	return extraW, extraH
 }
 
-// setWindowAspectByTitle snaps the window height proportionally to frameW:frameH
-// using thread-safe SetWindowPos so resized windows have zero black bars.
+// setWindowAspectByTitle snaps the window size proportionally to frameW:frameH
+// while clamping height to primaryWorkArea() so the bottom navigation bar never
+// hides behind the Windows taskbar and zero black bars appear.
 func setWindowAspectByTitle(title string, frameW, frameH, chromeLogicalH int, snap bool) {
 	if !snap || frameW <= 0 || frameH <= 0 {
 		return
@@ -86,16 +87,48 @@ func setWindowAspectByTitle(title string, frameW, frameH, chromeLogicalH int, sn
 	if zoomed != 0 {
 		return
 	}
+	restoreMu.Lock()
+	_, isMax := restoreRects[hwnd]
+	restoreMu.Unlock()
+	if isMax {
+		return
+	}
+
 	var wr winRect
 	_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
 	extraW, extraH := windowOverhead(hwnd, chromeLogicalH)
+	wa := primaryWorkArea()
+	maxH := int32(wa.Height - 12)
+	maxW := int32(wa.Width - 12)
+
 	curW := wr.Right - wr.Left
 	clientW := curW - extraW
-	if clientW > 120 {
-		targetH := int32(math.Round(float64(clientW)*float64(frameH)/float64(frameW))) + extraH
-		if math.Abs(float64(targetH-(wr.Bottom-wr.Top))) > 3 {
-			_, _, _ = procSetWindowPos.Call(hwnd, 0, 0, 0, uintptr(curW), uintptr(targetH), swpNoMove|swpNoZOrder|swpNoActivate)
-		}
+	if clientW < 180 {
+		clientW = 180
+		curW = clientW + extraW
+	}
+	targetH := int32(math.Round(float64(clientW)*float64(frameH)/float64(frameW))) + extraH
+	if targetH > maxH && maxH > extraH+120 {
+		targetH = maxH
+		clientH := targetH - extraH
+		curW = int32(math.Round(float64(clientH)*float64(frameW)/float64(frameH))) + extraW
+	}
+	if curW > maxW && maxW > extraW+120 {
+		curW = maxW
+		clientW = curW - extraW
+		targetH = int32(math.Round(float64(clientW)*float64(frameH)/float64(frameW))) + extraH
+	}
+
+	nx, ny := wr.Left, wr.Top
+	if ny+targetH > int32(wa.Y+wa.Height) {
+		ny = int32(wa.Y+wa.Height) - targetH
+	}
+	if ny < int32(wa.Y) {
+		ny = int32(wa.Y)
+	}
+
+	if math.Abs(float64(targetH-(wr.Bottom-wr.Top))) > 3 || math.Abs(float64(curW-(wr.Right-wr.Left))) > 3 || ny != wr.Top {
+		_, _, _ = procSetWindowPos.Call(hwnd, 0, uintptr(nx), uintptr(ny), uintptr(curW), uintptr(targetH), swpNoZOrder|swpNoActivate)
 	}
 }
 
