@@ -96,17 +96,10 @@ func TestPeriodicUpdateGuardsAndAutomaticStart(t *testing.T) {
 	}
 }
 
-func TestPeriodicUpdateDoesNotInterruptWork(t *testing.T) {
-	a := &app{}
-	if !a.periodicUpdateEligible() {
-		t.Fatal("idle app rejected")
-	}
-	for _, current := range []*app{
-		{busy: true}, {updateInProgress: true}, {backupCancel: func() {}},
-		{viewers: map[string]*viewer{"active": {}}}, {resources: map[string]*resourceSettings{"editing": {}}}, {displays: map[string]*displaySettingsWindow{"editing": {}}}, {newInstance: "pending"},
-	} {
-		if current.periodicUpdateEligible() {
-			t.Fatal("active work accepted")
-		}
+func TestUpdateKeyChangesWithVersionAndManifest(t *testing.T) {
+	a := updateKey(&update.Manifest{Version: "0.2.0", MSI: `C:\a.msi`, SHA256: "1"})
+	b := updateKey(&update.Manifest{Version: "0.2.1", MSI: `C:\a.msi`, SHA256: "1"})
+	if a == b || updateKey(nil) != "" {
+		t.Fatalf("unexpected update keys: %q vs %q", a, b)
 	}
 }

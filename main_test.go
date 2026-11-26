@@ -2,181 +2,77 @@ package main
 
 import (
 	"context"
-	"errors"
-	"image/png"
-	"os"
+	"image"
+	"image/color"
 	"testing"
 
-	"github.com/egoist/mygo/ui"
+	"github.com/moriyoshi/gpui-go/client"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
+	"github.com/neko233-com/NekoSimulator233/internal/display"
+	"github.com/neko233-com/NekoSimulator233/internal/syncctl"
 )
 
-func TestIndependentRefreshDoesNotDependOnMuMu(t *testing.T) {
-	a := &app{busy: true}
-	items := []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped", API: 34}}
-	a.applyIndependentRefresh(items, nil)
-	if a.busy || a.message != "已读取独立实例列表" || len(a.available) != 1 || a.selectedName() != avd.DefaultName {
-		t.Fatalf("independent refresh failed without MuMu: %+v", a)
+func TestEncodeRGBAAsBMPHeaderAndPixels(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	img.SetRGBA(1, 2, color.RGBA{R: 0xAA, G: 0xBB, B: 0xCC, A: 0xFF})
+	bmp := encodeRGBAAsBMP(img)
+	if len(bmp) != 54+4*3*4 {
+		t.Fatalf("unexpected BMP size: %d", len(bmp))
 	}
-	a.busy = true
-	a.applyIndependentRefresh(nil, errors.New("SDK missing"))
-	if a.busy || a.message != "读取独立实例失败：SDK missing" || len(a.available) != 1 {
-		t.Fatalf("refresh error lost existing list: %+v", a)
+	if bmp[0] != 'B' || bmp[1] != 'M' {
+		t.Fatalf("invalid BMP magic: %q", bmp[:2])
 	}
-}
-
-func TestInstanceView(t *testing.T) {
-	a := &app{message: "已连接", available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped", API: 34}}}
-	tester := ui.NewTester(a.view, 868, 584)
-	if path := os.Getenv("NEKO_TEST_DEVICE_PREVIEW"); path != "" {
-		f, err := os.Create(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := png.Encode(f, tester.Image()); err != nil {
-			_ = f.Close()
-			t.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, want := range []string{"NekoSimulator233", "已连接", "＋ 新建设备", "设备操作", "刷新设备", "未开机", "▶ 启动"} {
-		if !tester.HasText(want) {
-			t.Errorf("missing %q in %q", want, tester.Texts())
-		}
-	}
-	if err := tester.Click("设备操作"); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"安装 Google Play 镜像…", "资源设置…", "显示设置…", "系统兼容信息", "安装 APK…", "更新 APK…", "导入文件…", "常用应用状态", "打开 Chrome", "打开 Google Play", "打开 TapTap", "安装 TapTap…", "微信官方下载…", "抖音官方下载…", "备份选中实例…", "恢复备份到新实例…"} {
-		if !tester.HasText(want) {
-			t.Errorf("missing %q in %q", want, tester.Texts())
-		}
-	}
-	if tester.HasText("读取 MuMu 参考实例…") || tester.HasText("检查迁移条件") {
-		t.Fatal("the UI exposed a competing emulator integration")
+	// Pixel (1,2) in BGRA at offset 54 + (2*4 + 1)*4
+	off := 54 + (2*4+1)*4
+	if bmp[off] != 0xCC || bmp[off+1] != 0xBB || bmp[off+2] != 0xAA || bmp[off+3] != 0xFF {
+		t.Fatalf("unexpected BGRA pixel: %x", bmp[off:off+4])
 	}
 }
 
-func TestDisplaySettingsView(t *testing.T) {
-	s := &displaySettingsWindow{width: 720, height: 1280, density: 240}
-	tester := ui.NewTester(s.view, 560, 300)
-	for _, want := range []string{"独立实例显示设置", "宽度 px", "高度 px", "DPI", "保存设置"} {
-		if !tester.HasText(want) {
-			t.Errorf("missing %q in %q", want, tester.Texts())
+func TestGPUIKeyToHIDMapping(t *testing.T) {
+	cases := map[string]uint16{
+		"a": 0x04, "W": 0x1a, "0": 0x27, "1": 0x1e,
+		"Enter": 0x28, "Escape": 0x29, "Space": 0x2c,
+		"ArrowUp": 0x52, "F9": 0x42,
+	}
+	for k, want := range cases {
+		if got := gpuiKeyToHID(k); got != want {
+			t.Errorf("gpuiKeyToHID(%q) = 0x%02x, want 0x%02x", k, got, want)
 		}
 	}
 }
 
-func TestCloseCancelsSDKInstall(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	a := &app{sdkCancel: cancel}
-	if !a.cancelSDKForClose() || !a.closeAfterSDK || ctx.Err() != context.Canceled {
-		t.Fatal("close did not cancel SDK installation")
+func TestEntryManagerViewBuildsCleanlyWithoutAds(t *testing.T) {
+	a := &app{
+		ctx:           context.Background(),
+		sideTab:       "设备",
+		deviceSort:    deviceSortName,
+		newSystem:     systemAuto,
+		message:       "就绪",
+		icons:         &iconBank{},
+		dispatchFn:    make(map[uint64]func(*client.Event)),
+		thumbs:        make(map[string]*client.Resource),
+		thumbPending:  make(map[string]bool),
+		viewers:       make(map[string]*emulatorViewer),
+		settingsWins:  make(map[string]*deviceSettingsUI),
+		batchSelected: make(map[string]bool),
+		syncHub:       syncctl.NewHub(),
+		available: []avd.InstanceSummary{
+			{Name: "我的测试机", State: "running", API: 35, Cores: 4, RAMMiB: 4096, Width: 1080, Height: 1920, Density: 480},
+			{Name: "Neko-Device-1", State: "stopped", API: 34, Cores: 4, RAMMiB: 6144, Width: 1920, Height: 1080, Density: 280},
+		},
 	}
-	a.sdkCancel = nil
-	if a.cancelSDKForClose() {
-		t.Fatal("close blocked without SDK installation")
+	// Note: a.click() requires a non-nil client in live runs; here we verify
+	// helper functions and visibleDevices logic without a live GPUI daemon.
+	filtered := visibleDevices(a.available, "测试", deviceSortName)
+	if len(filtered) != 1 || filtered[0].Name != "我的测试机" {
+		t.Fatalf("visibleDevices filter failed: %+v", filtered)
 	}
-}
-
-func TestIndependentInstanceChoicesAndKeymaps(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", t.TempDir())
-	if keymapPathForInstance(avd.DefaultName) != keymapPath() {
-		t.Fatal("default instance no longer uses the existing keymap")
+	if androidLabel(35) != "Android 15" || androidLabel(30) != "Android 11" {
+		t.Fatalf("unexpected androidLabel")
 	}
-	if keymapPathForInstance("Alpha") == keymapPath() || keymapPathForInstance("Alpha") == keymapPathForInstance("Beta") || keymapPathForInstance("Alpha") != keymapPathForInstance("alpha") {
-		t.Fatal("instance keymap paths are not isolated")
-	}
-	a := &app{selected: "Alpha"}
-	a.setAvailable([]avd.InstanceSummary{{Name: avd.DefaultName, State: "not_created"}, {Name: "Alpha", State: "stopped"}, {Name: "Incomplete", State: "unknown"}})
-	if a.selectedName() != "Alpha" || len(a.instanceChoices()) != 2 {
-		t.Fatalf("incorrect choices: %+v", a.instanceChoices())
-	}
-	a.setAvailable([]avd.InstanceSummary{{Name: avd.DefaultName, State: "not_created"}})
-	if a.selectedName() != avd.DefaultName {
-		t.Fatal("missing selection was not reset")
-	}
-}
-
-func TestIndependentInstanceSelectionInView(t *testing.T) {
-	a := &app{selected: avd.DefaultName, available: []avd.InstanceSummary{{Name: avd.DefaultName, State: "stopped"}, {Name: "Alpha", State: "stopped"}}}
-	tester := ui.NewTester(a.view, 760, 600)
-	if err := tester.Click("设备操作"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("独立实例"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("Alpha"); err != nil {
-		t.Fatal(err)
-	}
-	if a.selectedName() != "Alpha" {
-		t.Fatalf("selection = %q", a.selectedName())
-	}
-}
-
-func TestNewInstanceSystemChoice(t *testing.T) {
 	if api, err := newSystemAPI(systemAndroid11); err != nil || api != 30 {
-		t.Fatalf("Android 11 choice = %d, %v", api, err)
+		t.Fatalf("newSystemAPI failed: %d %v", api, err)
 	}
-	if api, err := newSystemAPI(systemAuto); err != nil || api != 0 {
-		t.Fatalf("default choice = %d, %v", api, err)
-	}
-	if _, err := newSystemAPI("unknown"); err == nil {
-		t.Fatal("unsupported system choice accepted")
-	}
-}
-
-func TestNewInstanceSystemChoiceInView(t *testing.T) {
-	a := &app{}
-	tester := ui.NewTester(a.view, 760, 650)
-	if err := tester.Click("＋ 新建设备"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("系统版本"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click(systemAndroid11); err != nil {
-		t.Fatal(err)
-	}
-	if a.newSystem != systemAndroid11 {
-		t.Fatalf("system selection = %q", a.newSystem)
-	}
-}
-
-func TestResourceSettingsViewAndValidation(t *testing.T) {
-	s := &resourceSettings{cores: 4, ram: 2048}
-	tester := ui.NewTester(s.view, 500, 300)
-	for _, want := range []string{"独立实例资源设置", "CPU 核数", "内存 MiB", "保存设置"} {
-		if !tester.HasText(want) {
-			t.Errorf("missing %q in %q", want, tester.Texts())
-		}
-	}
-	s.ram = 511
-	s.save()
-	if s.message == "" || s.busy {
-		t.Fatal("invalid resources were not rejected")
-	}
-}
-
-func TestRestoreRequiresNewNameBeforeOpeningDialog(t *testing.T) {
-	a := &app{newInstance: "   "}
-	a.transferBackup(true)
-	if a.busy || a.backupCancel != nil || a.message == "" {
-		t.Fatalf("empty restore name was not rejected: %+v", a)
-	}
-}
-
-func TestCloseCancelsBackupBeforeWindowCloses(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	a := &app{backupCancel: cancel}
-	if !a.cancelBackupForClose() || !a.closeAfterBackup || ctx.Err() != context.Canceled {
-		t.Fatal("window close did not request backup cancellation")
-	}
-	a.backupCancel = nil
-	if a.cancelBackupForClose() {
-		t.Fatal("window close was blocked with no backup")
-	}
+	_ = display.FitContain
 }

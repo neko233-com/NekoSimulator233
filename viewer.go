@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/png"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,11 +15,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
+	"github.com/moriyoshi/gpui-go/client"
+	"github.com/moriyoshi/gpui-go/scene"
 	"github.com/neko233-com/NekoSimulator233/internal/avd"
 	"github.com/neko233-com/NekoSimulator233/internal/display"
-	"github.com/neko233-com/NekoSimulator233/internal/previewinput"
+	"github.com/neko233-com/NekoSimulator233/internal/macro"
+)
+
+const (
+	topBarHeight      float32 = 42
+	drawerBarHeight   float32 = 176
+	idViewerViewport  uint64  = 500
+	idMacroNameInput  uint64  = 501
+	idProfileInput    uint64  = 502
 )
 
 type pointerEvent struct {
@@ -44,862 +53,564 @@ const (
 	stickUp
 )
 
-type viewer struct {
-	win           *mygo.Window
-	source        display.Session
-	bitmap        *ui.Bitmap
-	width, height int
-	message       string
-	inputError    string
-	previewError  string
-	preview       *vulkanPreview
-	held          bool
-	previewHeld   bool
-	previewKeys   map[uint16]bool
-	keys          map[uint16]bool
-	screen        ui.Handle
-	events        chan pointerEvent
-	done          chan struct{}
-	once          sync.Once
-	streamMu      sync.Mutex
-	streamCancel  context.CancelFunc
-	captureRate   atomic.Int32
-	rateChanged   chan struct{}
-	visibilityCh  chan struct{}
-	visEpoch      atomic.Uint64
-	clearEpoch    atomic.Uint64
-	previewEpoch  uint64 // owned by the capture goroutine
-	previewShown  atomic.Bool
-	previewReady  bool // UI thread only; set after the preview presents a frame
-	hidden        atomic.Bool
-	minimized     atomic.Bool
-	bindings      map[uint16]mappedPoint
-	joystick      *joystickConfig
-	keymap        *keymapStore
-	baseKeymap    string
-	profile       string
-	profiles      []string
-	profileName   string
-	editing       int // 0 normal, 1 bind, 2 remove, 3 joystick position
-	pendingPoint  *mappedPoint
-	mappingError  string
-	fitMode       display.FitMode
-	audioSerial   string
-	instanceName  string
+// emulatorViewer implements Figure 2: Chrome-style multi-app top tab bar +
+// compact toolbar + pure black GPU-rendered Android viewport.
+type emulatorViewer struct {
+	app          *app
+	name         string
+	title        string
+	serial       string
+	win          *client.Window
+	source       display.Session
+	frameRes     *client.Resource
+	width        int
+	height       int
+	viewW        float32
+	viewH        float32
+	fitMode      display.FitMode
+	captureRate  atomic.Int32
+	rateChanged  chan struct{}
+	events       chan pointerEvent
+	done         chan struct{}
+	once         sync.Once
+	held         bool
+	keys         map[uint16]bool
+	muted        bool
+	topmost      bool
+	landscape    bool
+	drawerOpen   bool
+	drawerTab    string // "tools" | "keymap" | "macro" | "sync" | "sensor"
+	message      string
+	handlers     map[uint64]func(*client.Event)
+	runningApps   []avd.RunningApp
+	activeAppPkg  string
+	installedApps []string
+	settings      avd.InstanceSettings
+	liveFPS       float64
+	fpsFrames     int
+	fpsStart      time.Time
+
+	// Keymap
+	keymap       *keymapStore
+	baseKeymap   string
+	profile      string
+	profiles     []string
+	profileIn    scene.InputState
+	hProfileIn   uint64
+	bindings     map[uint16]mappedPoint
+	joystick     *joystickConfig
+	editing      int // 0=none, 1=bind, 2=remove, 3=joystick
+	pendingPoint *mappedPoint
+
+	// Macro recording & replay
+	recorder     macro.Recorder
+	macroNameIn  scene.InputState
+	hMacroIn     uint64
+	macros       []macro.Script
+	macroLoops   int
+	macroSpeed   float64
+	replayCancel context.CancelFunc
 }
 
-func openViewer(name string, source display.Session, bindingsPath, audioSerial string, onClosed func()) *viewer {
-	v := &viewer{source: source, events: make(chan pointerEvent, 64), done: make(chan struct{}), rateChanged: make(chan struct{}, 1), visibilityCh: make(chan struct{}, 1), message: "正在读取画面…", fitMode: display.FitCover, audioSerial: audioSerial, instanceName: name}
-	if _, ok := source.(display.MultiTouch); ok {
+func openEmulatorViewer(a *app, name string, source display.Session, bindingsPath string, inst avd.Instance) *emulatorViewer {
+	v := &emulatorViewer{
+		app:         a,
+		name:        name,
+		title:       name + " - NekoSimulator233",
+		serial:      inst.Serial,
+		source:      source,
+		fitMode:     display.FitContain,
+		rateChanged: make(chan struct{}, 1),
+		events:      make(chan pointerEvent, 128),
+		done:        make(chan struct{}),
+		keys:        make(map[uint16]bool),
+		handlers:    make(map[uint64]func(*client.Event)),
+		drawerTab:   "tools",
+		message:     "正在连接画面…",
+		macroLoops:  1,
+		macroSpeed:  1.0,
+		fpsStart:    time.Now(),
+	}
+	v.captureRate.Store(30)
+
+	if m, err := selectedManager(name); err == nil {
+		if cfg, err := m.InstanceSettings(); err == nil {
+			v.settings = cfg
+			if cfg.FPSLimit > 0 && cfg.FPSLimit <= 120 {
+				v.captureRate.Store(int32(cfg.FPSLimit))
+			}
+		}
+	} else {
+		v.settings = avd.DefaultInstanceSettings()
+	}
+
+	if _, ok := source.(display.MultiTouch); ok && bindingsPath != "" {
 		v.baseKeymap = bindingsPath
 		v.profile = defaultKeymapProfile
 		v.keymap = &keymapStore{path: bindingsPath}
-		var err error
-		v.bindings, err = v.keymap.read()
-		v.joystick = v.keymap.joystick
-		if err != nil {
-			v.mappingError = err.Error()
-			v.keymap = nil
-		} else if v.profiles, err = listKeymapProfiles(bindingsPath); err != nil {
-			v.mappingError = err.Error()
+		if b, err := v.keymap.read(); err == nil {
+			v.bindings = b
+			v.joystick = v.keymap.joystick
+			v.profiles, _ = listKeymapProfiles(bindingsPath)
 		}
 	}
-	geometry, hasGeometry := loadViewerGeometry(name)
-	width, height := 1000, 650
-	if hasGeometry {
-		width, height = geometry.Width, geometry.Height
-	} else if strings.EqualFold(name, avd.DefaultName) {
-		geometry, hasGeometry = defaultViewerGeometry(), true
-		width, height = geometry.Width, geometry.Height
-	}
-	v.win = mygo.NewWindow(mygo.WindowOptions{Title: name + " - NekoSimulator233", Width: width, Height: height, Content: ui.View(v.view)})
-	if hasGeometry {
-		v.win.SetBounds(mygo.Rectangle{X: geometry.Left, Y: geometry.Top, Width: geometry.Width, Height: geometry.Height})
-		if geometry.Maximized {
-			v.win.Maximize()
+	v.macros, _ = a.macroStore.List()
+
+	v.hProfileIn = a.cli.OnTextChange(func(_ context.Context, ev *client.Event) error {
+		if ch := ev.GetTextChanged(); ch != nil {
+			v.profileIn.Accept(ch)
 		}
-	}
-	v.win.OnClose(func(*mygo.CloseEvent) {
-		// Capture bounds before teardown: Bounds() can be empty in OnClosed.
-		bounds := v.win.Bounds()
-		if bounds.Width >= 320 && bounds.Height >= 240 {
-			_ = saveViewerGeometry(name, viewerGeometry{
-				Left: int(bounds.X), Top: int(bounds.Y), Width: int(bounds.Width), Height: int(bounds.Height),
-				Maximized: v.win.IsMaximized(),
-			})
-		}
+		return nil
 	})
-	v.win.OnClosed(func() {
-		v.stop()
-		if onClosed != nil {
-			onClosed()
+	v.hMacroIn = a.cli.OnTextChange(func(_ context.Context, ev *client.Event) error {
+		if ch := ev.GetTextChanged(); ch != nil {
+			v.macroNameIn.Accept(ch)
 		}
+		return nil
 	})
-	v.win.OnBlur(v.releaseHostInput)
-	v.win.OnHide(func() { v.setMainVisibility(&v.hidden, true) })
-	v.win.OnShow(func() { v.setMainVisibility(&v.hidden, false) })
-	v.win.OnMinimize(func() { v.setMainVisibility(&v.minimized, true) })
-	v.win.OnRestore(func() { v.setMainVisibility(&v.minimized, false) })
-	go v.run()
+
+	geom, hasGeom := loadViewerGeometry(name)
+	w, h := float32(520), float32(880)
+	if hasGeom {
+		w, h = float32(geom.Width), float32(geom.Height)
+	}
+	v.viewW, v.viewH = w, h
+
+	win, err := a.cli.OpenWindow(a.ctx, client.WindowOptions{
+		Title:  v.title,
+		Width:  w,
+		Height: h,
+	}, v.buildView())
+	if err != nil {
+		_ = source.Close()
+		a.message = "打开模拟器窗口失败：" + err.Error()
+		return nil
+	}
+	v.win = win
+	if hasGeom && geom.Left > -4000 && geom.Top > -4000 {
+		setWindowBoundsByTitle(v.title, geom.Left, geom.Top, geom.Width, geom.Height)
+	}
+	win.OnResized(func(_ context.Context, sz client.WindowSize) error {
+		v.viewW, v.viewH = sz.Width, sz.Height
+		v.render()
+		return nil
+	})
+
+	a.syncHub.Register(name, v)
+	go v.runCaptureAndInput()
+	go v.pollRunningApps()
 	return v
 }
 
-func (v *viewer) stop() { v.once.Do(func() { close(v.done); v.cancelStream() }) }
-
-func (v *viewer) captureVisible() bool {
-	return (!v.hidden.Load() && !v.minimized.Load()) || v.previewShown.Load()
-}
-
-// The main window and the preview can independently keep capture active.
-// These transitions run on the UI thread.
-func (v *viewer) setMainVisibility(flag *atomic.Bool, hidden bool) {
-	wasVisible := v.captureVisible()
-	if flag.Swap(hidden) == hidden {
-		return
-	}
-	if hidden {
-		v.releaseHostInput()
-	}
-	if wasVisible && !v.captureVisible() {
-		v.suspendPresentation()
-	} else {
-		v.notifyVisibility()
-	}
-	v.applyAudioMutePolicy()
-}
-
-// applyAudioMutePolicy mirrors MuMu's volume_setting.window_minimized_mute:
-// mute guest media audio when no viewer surface is visible, and unmute when
-// one becomes visible again. It runs off the UI thread.
-func (v *viewer) applyAudioMutePolicy() {
-	if v.audioSerial == "" || v.instanceName == "" {
-		return
-	}
-	mute := !v.captureVisible()
-	serial, name := v.audioSerial, v.instanceName
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		manager, err := avd.DiscoverManager()
-		if err != nil {
-			return
+func (v *emulatorViewer) closeWindow() {
+	if v.win != nil {
+		if bounds, ok := getWindowBoundsByTitle(v.title); ok {
+			_ = saveViewerGeometry(v.name, bounds)
 		}
-		manager, err = manager.WithName(name)
-		if err != nil {
-			return
+		_ = v.win.Close(v.app.ctx)
+	}
+	v.stop()
+}
+
+func (v *emulatorViewer) stop() {
+	v.once.Do(func() {
+		close(v.done)
+		if v.replayCancel != nil {
+			v.replayCancel()
 		}
-		_ = manager.SetMusicMute(ctx, serial, mute)
-	}()
+		v.app.syncHub.Unregister(v.name)
+		delete(v.app.viewers, independentViewerKey(v.name))
+		if v.frameRes != nil {
+			_ = v.frameRes.Release(v.app.ctx)
+			v.frameRes = nil
+		}
+	})
 }
 
-func (v *viewer) setPreviewVisibility(shown bool) {
-	wasVisible := v.captureVisible()
-	if v.previewShown.Swap(shown) == shown {
+func (v *emulatorViewer) render() {
+	if v.win == nil {
 		return
 	}
-	v.previewReady = false
-	if !shown {
-		v.applyPreviewInput(previewinput.Event{Kind: "release"})
-		v.clearEpoch.Add(1)
-	}
-	if wasVisible && !v.captureVisible() {
-		v.suspendPresentation()
-	} else {
-		v.notifyVisibility()
-	}
+	v.handlers = make(map[uint64]func(*client.Event))
+	_ = v.win.Set(v.app.ctx, v.buildView())
 }
 
-// Called on the UI thread. Incrementing the epoch also invalidates a capture
-// that was already in flight when the window was hidden.
-func (v *viewer) suspendPresentation() {
-	v.visEpoch.Add(1)
-	v.clearEpoch.Add(1)
-	v.previewReady = false
-	v.setFrameSize(0, 0)
-	v.bitmap = nil
-	v.message = "画面采集已暂停"
-	v.releaseHostInput()
-	v.cancelStream()
-	v.notifyVisibility()
-}
-
-func (v *viewer) notifyVisibility() {
-	select {
-	case v.visibilityCh <- struct{}{}:
-	default:
-	}
-}
-
-func (v *viewer) frameCurrent(epoch uint64) bool {
-	return epoch == v.visEpoch.Load() && v.captureVisible()
-}
-
-// Only the capture goroutine writes to the preview pipe.
-func (v *viewer) syncPreviewVisibility() {
-	epoch := v.clearEpoch.Load()
-	if epoch == v.previewEpoch {
-		return
-	}
-	v.previewEpoch = epoch
-	if v.preview != nil {
-		if err := v.preview.inactive(); err != nil {
-			v.preview.close()
-			v.preview = nil
-			v.reportPreview(err)
+func (v *emulatorViewer) click(fn func()) uint64 {
+	id := v.app.cli.OnClick(func(_ context.Context, _ *client.Event) error { return nil })
+	v.handlers[id] = func(_ *client.Event) {
+		if fn != nil {
+			fn()
 		}
 	}
+	return id
 }
 
-func (v *viewer) cancelStream() {
-	v.streamMu.Lock()
-	defer v.streamMu.Unlock()
-	if v.streamCancel != nil {
-		v.streamCancel()
-	}
+func (v *emulatorViewer) interact(fn func(*client.Event)) uint64 {
+	id := v.app.cli.OnEvent(func(_ context.Context, _ *client.Event) error { return nil })
+	v.handlers[id] = fn
+	return id
 }
 
-// The setting limits polling requests rather than promising displayed FPS.
-// A single notification suffices because the consumer always reads the latest
-// atomic value, even if the user changes the setting several times quickly.
-func (v *viewer) setCaptureRate(rate int) bool {
-	if rate != 15 && rate != 30 && rate != 60 && rate != 120 {
+func (v *emulatorViewer) handleEvent(ev *client.Event) bool {
+	if v.win == nil || ev.GetWindow().GetId() != v.win.Handle().GetId() {
 		return false
 	}
-	v.captureRate.Store(int32(rate))
-	select {
-	case v.rateChanged <- struct{}{}:
-	default:
+	if ev.GetWindowClosed() != nil {
+		if bounds, ok := getWindowBoundsByTitle(v.title); ok {
+			_ = saveViewerGeometry(v.name, bounds)
+		}
+		v.stop()
+		v.app.render()
+		return true
+	}
+	if fc := ev.GetFocusChanged(); fc != nil && !fc.Focused {
+		v.releaseHostInput()
+	}
+	if fn, ok := v.handlers[ev.GetHandlerId()]; ok && fn != nil {
+		fn(ev)
+		return true
 	}
 	return true
 }
 
-func (v *viewer) currentCaptureRate() int {
-	if rate := int(v.captureRate.Load()); rate != 0 {
-		return rate
-	}
-	return 30
-}
-
-func (v *viewer) run() {
-	if os.Getenv("NEKO_EXPERIMENTAL_VULKAN_VIEWER") == "1" {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-v.done:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-		preview, err := startVulkanPreview(ctx, func(event previewinput.Event) { v.deliverPreviewInput(ctx, event) })
-		if err != nil {
-			v.reportPreview(err)
-		} else {
-			v.preview = preview
-			defer preview.close()
-		}
-	}
+func (v *emulatorViewer) runCaptureAndInput() {
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		runViewerInput(v.done, v.events, newViewerInput(v.source), v.reportInput)
+		runViewerInput(v.done, v.events, newViewerInput(v.source), func(err error) {
+			v.app.post(func() { v.message = err.Error(); v.render() })
+		})
 	}()
 	defer func() {
 		<-inputDone
 		_ = v.source.Close()
 	}()
-	if source, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
-		if v.runStream(source) {
-			return
-		}
+
+	rate := int(v.captureRate.Load())
+	if rate <= 0 {
+		rate = 30
 	}
-	v.runPolling()
-}
-
-type captureRequest struct {
-	buffer *image.RGBA
-	epoch  uint64
-}
-
-type captureResult struct {
-	frame *image.RGBA
-	epoch uint64
-	err   error
-}
-
-// Keep pipe control responsive even when a screenshot request is in flight.
-// A single worker preserves buffer ownership and prevents overlapping captures.
-func (v *viewer) runPolling() {
-	requests := make(chan captureRequest)
-	results := make(chan captureResult)
-	workerDone := make(chan struct{})
-	go func() {
-		defer close(workerDone)
-		for {
-			select {
-			case <-v.done:
-				return
-			case req := <-requests:
-				frame, err := v.source.Capture(req.buffer)
-				select {
-				case results <- captureResult{frame: frame, epoch: req.epoch, err: err}:
-				case <-v.done:
-					return
-				}
-			}
-		}
-	}()
-	defer func() { <-workerDone }()
-	ticker := time.NewTicker(time.Second / time.Duration(v.currentCaptureRate()))
+	ticker := time.NewTicker(time.Second / time.Duration(rate))
 	defer ticker.Stop()
-	var frames [2]*image.RGBA
-	frameIndex := 0
-	capturing := false
+
+	var buf *image.RGBA
 	for {
 		select {
 		case <-v.done:
 			return
 		case <-v.rateChanged:
-			ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
-		case <-v.visibilityCh:
-			v.syncPreviewVisibility()
+			r := int(v.captureRate.Load())
+			if r <= 0 {
+				r = 30
+			}
+			ticker.Reset(time.Second / time.Duration(r))
 		case <-ticker.C:
-			v.syncPreviewVisibility()
-			if capturing || !v.captureVisible() {
+			frame, err := v.source.Capture(buf)
+			if err != nil {
 				continue
 			}
+			buf = frame
+			bmp := encodeRGBAAsBMP(frame)
+			if len(bmp) == 0 {
+				continue
+			}
+			fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy()
+			ack := make(chan struct{})
+			v.app.post(func() {
+				defer close(ack)
+				select {
+				case <-v.done:
+					return
+				default:
+				}
+				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/bmp", bmp)
+				if upErr == nil {
+					old := v.frameRes
+					v.frameRes = res
+					v.width, v.height = fw, fh
+					v.message = ""
+					v.fpsFrames++
+					if elapsed := time.Since(v.fpsStart); elapsed >= time.Second {
+						v.liveFPS = float64(v.fpsFrames) / elapsed.Seconds()
+						v.fpsFrames = 0
+						v.fpsStart = time.Now()
+					}
+					v.render()
+					if old != nil {
+						_ = old.Release(v.app.ctx)
+					}
+				}
+			})
 			select {
-			case requests <- captureRequest{buffer: frames[frameIndex], epoch: v.visEpoch.Load()}:
-				capturing = true
-			default:
-			}
-		case result := <-results:
-			capturing = false
-			if !v.frameCurrent(result.epoch) {
-				continue
-			}
-			if result.err != nil {
-				v.report(result.err)
-				continue
-			}
-			frames[frameIndex] = result.frame
-			if !v.presentFrame(result.frame, result.epoch) {
+			case <-ack:
+			case <-v.done:
 				return
 			}
-			frameIndex = 1 - frameIndex
 		}
 	}
 }
 
-// presentFrame waits for the UI to accept the frame before reusing buffers.
-func (v *viewer) presentFrame(frame *image.RGBA, epoch uint64) bool {
-	v.syncPreviewVisibility()
-	ack := make(chan struct{})
-	accepted := false
-	v.win.Update(func() {
-		defer close(ack)
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		if !v.frameCurrent(epoch) {
-			return
-		}
-		if !v.hidden.Load() && !v.minimized.Load() {
-			if v.bitmap == nil {
-				v.bitmap = ui.NewBitmap(frame)
-			} else {
-				v.bitmap.Update(frame)
-			}
-		} else {
-			v.bitmap = nil
-		}
-		v.setFrameSize(frame.Bounds().Dx(), frame.Bounds().Dy())
-		v.message = ""
-		accepted = true
-	})
-	select {
-	case <-ack:
-		if accepted && v.frameCurrent(epoch) && v.previewShown.Load() && v.preview != nil {
-			if err := v.preview.send(frame); err != nil {
-				v.preview.close()
-				v.preview = nil
-				v.reportPreview(err)
-			}
-		}
-		return true
-	case <-v.done:
-		return false
-	}
-}
-
-func (v *viewer) reportPreview(err error) {
-	v.win.Update(func() {
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		v.previewError = "实验 Vulkan 画面不可用：" + err.Error()
-	})
-}
-
-// runStream returns false on a stream failure, allowing the existing polling
-// transport to take over. Capture pauses when both windows are hidden.
-func (v *viewer) runStream(source display.FrameStreamer) bool {
+func (v *emulatorViewer) pollRunningApps() {
+	ticker := time.NewTicker(2500 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		v.syncPreviewVisibility()
 		select {
 		case <-v.done:
-			return true
-		default:
-		}
-		if !v.captureVisible() {
-			timer := time.NewTimer(200 * time.Millisecond)
-			select {
-			case <-v.done:
-				timer.Stop()
-				return true
-			case <-v.visibilityCh:
-				timer.Stop()
-			case <-timer.C:
+			return
+		case <-ticker.C:
+			m, err := selectedManager(v.name)
+			if err != nil {
+				continue
 			}
-			continue
-		}
-		epoch := v.visEpoch.Load()
-		ctx, cancel := context.WithCancel(context.Background())
-		v.streamMu.Lock()
-		select {
-		case <-v.done:
-			v.streamMu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			apps, err := m.ListRunningApps(ctx, avd.Instance{Serial: v.serial, Name: v.name})
 			cancel()
-			return true
-		default:
-		}
-		if !v.frameCurrent(epoch) {
-			v.streamMu.Unlock()
-			cancel()
-			continue
-		}
-		v.streamCancel = cancel
-		v.streamMu.Unlock()
-		var startTimedOut atomic.Bool
-		startTimer := time.AfterFunc(5*time.Second, func() { startTimedOut.Store(true); cancel() })
-		stream, err := source.OpenFrameStream(ctx)
-		var pumpDone <-chan struct{}
-		var ready <-chan pumpedFrame
-		var frames <-chan pumpedFrame
-		var available chan<- *image.RGBA
-		var ticker *time.Ticker
-		if err == nil {
-			frames, available, pumpDone = pumpFrames(ctx, stream)
-			ticker = time.NewTicker(time.Second / time.Duration(v.currentCaptureRate()))
-		}
-		for err == nil {
-			select {
-			case <-ctx.Done():
-				err = ctx.Err()
-			case <-v.done:
-				cancel()
-				err = context.Canceled
-			case <-v.rateChanged:
-				ticker.Reset(time.Second / time.Duration(v.currentCaptureRate()))
-			case <-v.visibilityCh:
-				v.syncPreviewVisibility()
-			case <-ticker.C:
-				ready = frames
-			case next, ok := <-ready:
-				ready = nil
-				startTimer.Stop()
-				if !ok {
-					err = errors.New("画面流已结束")
-					break
-				}
-				if errors.Is(next.err, display.ErrDisplayInactive) {
-					if !v.presentInactive() {
-						cancel()
-						err = context.Canceled
-					}
-				} else if next.err != nil {
-					err = next.err
-				} else {
-					presented := v.presentFrame(next.frame, epoch)
-					if !presented {
-						cancel()
-						err = context.Canceled
-					} else {
-						select {
-						case available <- next.frame:
-						case <-ctx.Done():
-						}
+			if err != nil {
+				continue
+			}
+			v.app.post(func() {
+				v.runningApps = apps
+				v.activeAppPkg = ""
+				for _, a := range apps {
+					if a.Foreground {
+						v.activeAppPkg = a.Package
+						break
 					}
 				}
-			}
+				v.render()
+			})
 		}
-		if ticker != nil {
-			ticker.Stop()
-		}
-		v.streamMu.Lock()
-		v.streamCancel = nil
-		v.streamMu.Unlock()
-		startTimer.Stop()
-		interrupted := ctx.Err() != nil
-		cancel()
-		if pumpDone != nil {
-			<-pumpDone
-		}
-		select {
-		case <-v.done:
-			return true
-		default:
-		}
-		if startTimedOut.Load() {
-			v.report(errors.New("画面流启动超时，已切换截图模式"))
-			return false
-		}
-		if interrupted || !v.captureVisible() {
-			continue
-		}
-		if err != nil {
-			v.report(err)
-		}
-		return false
 	}
 }
 
-func (v *viewer) presentInactive() bool {
-	ack := make(chan struct{})
-	v.win.Update(func() {
-		defer close(ack)
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		v.setFrameSize(0, 0)
-		v.bitmap = nil
-		v.previewReady = false
-		v.message = display.ErrDisplayInactive.Error()
-	})
-	select {
-	case <-ack:
-		if v.preview != nil {
-			if err := v.preview.inactive(); err != nil {
-				v.preview.close()
-				v.preview = nil
-				v.reportPreview(err)
-			}
-		}
-		return true
-	case <-v.done:
-		return false
-	}
-}
-
-func (v *viewer) report(err error) {
-	v.win.Update(func() {
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		v.message = err.Error()
-	})
-}
-
-func (v *viewer) reportInput(err error) {
-	v.win.Update(func() {
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		v.inputError = err.Error()
-	})
-}
-
-// saveScreenshot writes the current guest frame to the user's Pictures folder,
-// matching MuMu's one-click screenshot action. Capture runs off the UI thread.
-func (v *viewer) saveScreenshot() {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		frame, err := v.source.Capture(nil)
-		if err == nil && ctx.Err() != nil {
-			err = ctx.Err()
-		}
-		if err != nil {
-			v.reportInput(err)
-			return
-		}
-		dir := filepath.Join(os.Getenv("USERPROFILE"), "Pictures", "NekoSimulator233")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			v.reportInput(err)
-			return
-		}
-		name := filepath.Join(dir, fmt.Sprintf("neko-%s.png", time.Now().Format("20060102-150405")))
-		file, err := os.Create(name)
-		if err != nil {
-			v.reportInput(err)
-			return
-		}
-		err = png.Encode(file, frame)
-		closeErr := file.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			v.reportInput(err)
-			return
-		}
-		v.win.Update(func() { v.message = "截图已保存：" + name })
-	}()
-}
-
-// painterFit keeps MyGo's drawing and our input mapping on the same mode.
-func painterFit(mode display.FitMode) ui.Fit {
-	switch mode {
-	case display.FitCover:
-		return ui.Cover
-	case display.FitStretch:
-		return ui.FillBox
-	default:
-		return ui.Contain
-	}
-}
-
-// fitPoint maps viewer pixels to guest pixels using the active scaling mode.
-func fitPoint(mode display.FitMode, x, y, w, h float32, fw, fh int, clamp bool) (int, int, bool) {
-	return display.MapPoint(mode, x, y, w, h, fw, fh, clamp)
-}
-
-func (v *viewer) enqueue(e pointerEvent) {
+func (v *emulatorViewer) enqueue(e pointerEvent) {
 	select {
 	case v.events <- e:
 	default:
-		// A dropped release could leave a virtual finger pressed. Closing the
-		// session causes the worker to release it instead of guessing state.
-		if e.kind != pointerMove {
-			v.inputError = "输入队列繁忙，已关闭画面连接"
-			v.stop()
-		}
 	}
 }
 
-func (v *viewer) releaseHostKeys() {
-	clear(v.previewKeys)
-	if len(v.keys) == 0 {
-		return
-	}
-	clear(v.keys)
-	v.enqueue(pointerEvent{kind: releaseKeys})
-}
-
-func (v *viewer) releaseHostInput() {
-	v.previewHeld = false
+func (v *emulatorViewer) releaseHostInput() {
 	if v.held {
 		v.held = false
 		v.enqueue(pointerEvent{kind: pointerUp})
 	}
-	v.releaseHostKeys()
-}
-
-func (v *viewer) deliverPreviewInput(ctx context.Context, event previewinput.Event) {
-	ack := make(chan struct{})
-	v.win.Update(func() {
-		defer close(ack)
-		select {
-		case <-v.done:
-			return
-		default:
-		}
-		v.applyPreviewInput(event)
-	})
-	select {
-	case <-ack:
-	case <-ctx.Done():
-	case <-v.done:
+	if len(v.keys) > 0 {
+		clear(v.keys)
+		v.enqueue(pointerEvent{kind: releaseKeys})
 	}
 }
 
-// applyPreviewInput runs on the UI thread, sharing held state with the main
-// viewer so focus changes, resizing and queue overflow release touches safely.
-func (v *viewer) applyPreviewInput(event previewinput.Event) {
-	if !event.Valid() {
-		return
+func (v *emulatorViewer) viewportSize() (float32, float32) {
+	vh := v.viewH - topBarHeight
+	if v.drawerOpen {
+		vh -= drawerBarHeight
 	}
-	if event.Kind == "visible" || event.Kind == "hidden" {
-		v.setPreviewVisibility(event.Kind == "visible")
-		return
+	if vh < 60 {
+		vh = 60
 	}
-	if event.Kind == "ready" {
-		if v.previewShown.Load() {
-			v.previewReady = true
+	vw := v.viewW
+	if vw < 60 {
+		vw = 60
+	}
+	return vw, vh
+}
+
+func (v *emulatorViewer) mapPointer(pos *scene.Point, clamp bool) (int, int, float64, float64, bool) {
+	if pos == nil || v.width <= 0 || v.height <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	topOffset := topBarHeight
+	if v.drawerOpen {
+		topOffset += drawerBarHeight
+	}
+	localY := pos.Y - topOffset
+	if localY < 0 {
+		if !clamp {
+			return 0, 0, 0, 0, false
 		}
-		return
+		localY = 0
 	}
-	release := func() {
-		if v.previewHeld {
-			v.previewHeld = false
-			if v.held {
-				v.held = false
-				v.enqueue(pointerEvent{kind: pointerUp})
-			}
-		}
+	vw, vh := v.viewportSize()
+	gx, gy, ok := display.MapPoint(v.fitMode, pos.X, localY, vw, vh, v.width, v.height, clamp)
+	if !ok {
+		return 0, 0, 0, 0, false
 	}
-	if event.Kind == "release" {
-		for usage := range v.previewKeys {
-			v.releaseHostKey(usage)
-			delete(v.previewKeys, usage)
-		}
-		release()
-		return
-	}
-	if event.Kind == "up" {
-		release()
-		return
-	}
-	if !v.previewShown.Load() || !v.previewReady {
-		return
-	}
-	if event.Kind == "key_down" || event.Kind == "key_up" {
-		if event.Kind == "key_up" {
-			if v.previewKeys[event.Usage] {
-				v.releaseHostKey(event.Usage)
-				delete(v.previewKeys, event.Usage)
-			}
+	nx := float64(gx) / float64(max(1, v.width-1))
+	ny := float64(gy) / float64(max(1, v.height-1))
+	return gx, gy, nx, ny, true
+}
+
+func (v *emulatorViewer) handleViewportEvent(ev *client.Event) {
+	switch ev.Kind.(type) {
+	case *client.EventMouseDown:
+		p := ev.GetMouseDown()
+		if p == nil {
 			return
 		}
-		if v.editing != 0 || v.width <= 0 || v.height <= 0 {
+		if p.Button == client.MouseRight && v.settings.RightClickBack {
+			v.enqueue(pointerEvent{kind: navigate, action: display.Back})
 			return
 		}
-		if event.Kind == "key_down" {
-			if v.previewKeys == nil {
-				v.previewKeys = make(map[uint16]bool)
-			}
-			if v.previewKeys[event.Usage] {
-				return
-			}
-			if v.keys[event.Usage] {
-				return
-			}
-			if v.handleHostKey(event.Usage, true) && v.keys[event.Usage] {
-				v.previewKeys[event.Usage] = true
-			}
+		if p.Button != client.MouseLeft {
+			return
 		}
-		return
-	}
-	if v.editing != 0 || event.FrameWidth != v.width || event.FrameHeight != v.height {
-		release()
-		return
-	}
-	if event.Kind == "down" {
-		x, y, ok := event.Point(false)
+		gx, gy, nx, ny, ok := v.mapPointer(p.Position, false)
 		if !ok {
 			return
 		}
-		if v.held {
-			v.held = false
-			v.enqueue(pointerEvent{kind: pointerUp})
+		if v.editing != 0 {
+			if v.editing == 1 {
+				v.pendingPoint = &mappedPoint{X: nx, Y: ny}
+			} else if v.editing == 3 {
+				rad := 0.12
+				if v.joystick != nil {
+					rad = v.joystick.Radius
+				}
+				_ = v.setJoystick(&joystickConfig{Center: mappedPoint{X: nx, Y: ny}, Radius: rad})
+				v.editing = 1
+			}
+			v.render()
+			return
 		}
-		v.inputError = ""
-		v.held, v.previewHeld = true, true
-		v.enqueue(pointerEvent{kind: pointerDown, x: x, y: y})
-	} else if event.Kind == "move" && v.previewHeld && v.held {
-		if x, y, ok := event.Point(true); ok {
-			v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
+		v.held = true
+		v.enqueue(pointerEvent{kind: pointerDown, x: gx, y: gy})
+		v.recorder.Record(macro.Event{Kind: macro.EventTouchDown, NX: nx, NY: ny})
+		v.app.syncHub.BroadcastTouchDown(v.name, nx, ny)
+
+	case *client.EventMouseMove:
+		if !v.held {
+			return
 		}
+		p := ev.GetMouseMove()
+		if p == nil {
+			return
+		}
+		gx, gy, nx, ny, ok := v.mapPointer(p.Position, true)
+		if ok {
+			v.enqueue(pointerEvent{kind: pointerMove, x: gx, y: gy})
+			v.recorder.Record(macro.Event{Kind: macro.EventTouchMove, NX: nx, NY: ny})
+			v.app.syncHub.BroadcastTouchMove(v.name, nx, ny)
+		}
+
+	case *client.EventMouseUp:
+		if !v.held {
+			return
+		}
+		v.held = false
+		v.enqueue(pointerEvent{kind: pointerUp})
+		v.recorder.Record(macro.Event{Kind: macro.EventTouchUp})
+		v.app.syncHub.BroadcastTouchUp(v.name)
+
+	case *client.EventScroll:
+		sc := ev.GetScroll()
+		if sc == nil || sc.Delta == nil || v.width <= 0 || v.height <= 0 {
+			return
+		}
+		gx, gy, _, _, ok := v.mapPointer(sc.Position, true)
+		if !ok {
+			return
+		}
+		dy := int(math.Round(float64(sc.Delta.Y) * 2.5))
+		if dy == 0 {
+			return
+		}
+		y2 := max(0, min(v.height-1, gy+dy))
+		v.enqueue(pointerEvent{kind: pointerDown, x: gx, y: gy})
+		v.enqueue(pointerEvent{kind: pointerMove, x: gx, y: y2})
+		v.enqueue(pointerEvent{kind: pointerUp})
+
+	case *client.EventKeyDown:
+		ke := ev.GetKeyDown()
+		if ke == nil {
+			return
+		}
+		usage := gpuiKeyToHID(ke.Key)
+		if usage == 0 {
+			return
+		}
+		v.handleHostKey(usage, true)
+
+	case *client.EventKeyUp:
+		ke := ev.GetKeyUp()
+		if ke == nil {
+			return
+		}
+		usage := gpuiKeyToHID(ke.Key)
+		if usage == 0 {
+			return
+		}
+		v.handleHostKey(usage, false)
+
+	case *client.EventFileDrop:
+		fd := ev.GetFileDrop()
+		if fd == nil || len(fd.Paths) == 0 {
+			return
+		}
+		v.handleDroppedFiles(fd.Paths)
 	}
 }
 
-// handleHostKey is shared by the main and experimental preview windows.
-// It runs on the UI thread and keeps physical keys, mapped taps and joystick
-// bindings in the same ordered input queue.
-func (v *viewer) handleHostKey(usage uint16, down bool) bool {
+func (v *emulatorViewer) handleHostKey(usage uint16, down bool) {
 	if !display.ValidKeyboardUsage(usage) {
-		return false
+		return
 	}
 	if down && v.editing != 0 {
-		if v.editing == 3 || v.editing == 1 && v.pendingPoint == nil {
-			return true
-		}
-		point := v.pendingPoint
-		if v.editing == 2 {
-			point = nil
-		}
-		if err := v.setBinding(usage, point); err != nil {
-			v.mappingError = err.Error()
-		} else {
-			v.mappingError = ""
+		if v.editing == 1 && v.pendingPoint != nil {
+			_ = v.setBinding(usage, v.pendingPoint)
 			v.pendingPoint = nil
+			v.render()
+		} else if v.editing == 2 {
+			_ = v.setBinding(usage, nil)
+			v.render()
 		}
-		return true
-	}
-	if !down && v.editing != 0 {
-		return true
+		return
 	}
 	if !down {
-		return v.releaseHostKey(usage)
+		if !v.keys[usage] {
+			return
+		}
+		delete(v.keys, usage)
+		if v.joystick != nil && joystickKey(usage) {
+			v.enqueue(pointerEvent{kind: stickUp, usage: usage})
+		} else if _, mapped := v.bindings[usage]; mapped {
+			v.enqueue(pointerEvent{kind: mappedUp, usage: usage})
+		} else {
+			v.enqueue(pointerEvent{kind: keyUp, usage: usage})
+		}
+		v.recorder.Record(macro.Event{Kind: macro.EventKeyUp, Usage: usage})
+		v.app.syncHub.BroadcastKey(v.name, usage, false)
+		return
 	}
-	if v.keys == nil {
-		v.keys = make(map[uint16]bool)
-	}
-	v.inputError = ""
 	if v.keys[usage] {
-		return true
+		return
 	}
 	v.keys[usage] = true
-	if v.joystick != nil && joystickKey(usage) {
-		if v.width <= 0 || v.height <= 0 {
-			delete(v.keys, usage)
-			v.inputError = "画面尚未就绪，无法使用方向摇杆"
-			return true
-		}
+	if v.joystick != nil && joystickKey(usage) && v.width > 0 && v.height > 0 {
 		p := v.joystick
-		v.enqueue(pointerEvent{kind: stickDown, usage: usage, x: int(p.Center.X*float64(v.width-1) + 0.5), y: int(p.Center.Y*float64(v.height-1) + 0.5), radius: max(1, int(p.Radius*float64(min(v.width-1, v.height-1))+0.5)), maxX: v.width - 1, maxY: v.height - 1})
-	} else if p, ok := v.bindings[usage]; ok {
-		if v.width <= 0 || v.height <= 0 {
-			delete(v.keys, usage)
-			v.inputError = "画面尚未就绪，无法使用游戏键位"
-			return true
-		}
-		v.enqueue(pointerEvent{kind: mappedDown, usage: usage, x: int(p.X*float64(v.width-1) + 0.5), y: int(p.Y*float64(v.height-1) + 0.5)})
+		v.enqueue(pointerEvent{
+			kind: stickDown, usage: usage,
+			x:      int(p.Center.X*float64(v.width-1) + 0.5),
+			y:      int(p.Center.Y*float64(v.height-1) + 0.5),
+			radius: max(1, int(p.Radius*float64(min(v.width-1, v.height-1))+0.5)),
+			maxX:   v.width - 1, maxY: v.height - 1,
+		})
+	} else if p, ok := v.bindings[usage]; ok && v.width > 0 && v.height > 0 {
+		v.enqueue(pointerEvent{
+			kind: mappedDown, usage: usage,
+			x: int(p.X*float64(v.width-1) + 0.5),
+			y: int(p.Y*float64(v.height-1) + 0.5),
+		})
 	} else {
 		v.enqueue(pointerEvent{kind: keyDown, usage: usage})
 	}
-	return true
+	v.recorder.Record(macro.Event{Kind: macro.EventKeyDown, Usage: usage})
+	v.app.syncHub.BroadcastKey(v.name, usage, true)
 }
 
-func (v *viewer) releaseHostKey(usage uint16) bool {
-	if !v.keys[usage] {
-		return false
-	}
-	delete(v.keys, usage)
-	if v.joystick != nil && joystickKey(usage) {
-		v.enqueue(pointerEvent{kind: stickUp, usage: usage})
-	} else if _, mapped := v.bindings[usage]; mapped {
-		v.enqueue(pointerEvent{kind: mappedUp, usage: usage})
-	} else {
-		v.enqueue(pointerEvent{kind: keyUp, usage: usage})
-	}
-	return true
-}
-
-func (v *viewer) setFrameSize(width, height int) {
-	if v.width > 0 && v.height > 0 && (v.width != width || v.height != height) {
-		v.releaseHostInput()
-		v.inputError = "画面尺寸已变化，已释放按住的输入"
-	}
-	v.width, v.height = width, height
-}
-
-func (v *viewer) setBinding(usage uint16, point *mappedPoint) error {
+func (v *emulatorViewer) setBinding(usage uint16, point *mappedPoint) error {
 	if v.keymap == nil {
-		return fmt.Errorf("键位配置不可用")
-	}
-	if point != nil && v.joystick != nil && joystickKey(usage) {
-		return fmt.Errorf("WASD 已用于方向摇杆，请先删除摇杆")
+		return errors.New("键位配置不可用")
 	}
 	next := make(map[uint16]mappedPoint, len(v.bindings)+1)
 	for k, p := range v.bindings {
@@ -917,16 +628,9 @@ func (v *viewer) setBinding(usage uint16, point *mappedPoint) error {
 	return nil
 }
 
-func (v *viewer) setJoystick(stick *joystickConfig) error {
+func (v *emulatorViewer) setJoystick(stick *joystickConfig) error {
 	if v.keymap == nil {
-		return fmt.Errorf("键位配置不可用")
-	}
-	if stick != nil {
-		for key := range v.bindings {
-			if joystickKey(key) {
-				return fmt.Errorf("WASD 已有单点键位，请先删除这些键位")
-			}
-		}
+		return errors.New("键位配置不可用")
 	}
 	if err := v.keymap.saveWithJoystick(v.bindings, stick); err != nil {
 		return err
@@ -935,231 +639,784 @@ func (v *viewer) setJoystick(stick *joystickConfig) error {
 	return nil
 }
 
-func (v *viewer) view(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Gap(4).Children(func() {
-		message := v.message
-		if v.previewError != "" {
-			message = v.previewError
+// syncctl.Target implementation
+func (v *emulatorViewer) SyncTouchDown(nx, ny float64) {
+	if v.width <= 0 || v.height <= 0 {
+		return
+	}
+	x := max(0, min(v.width-1, int(nx*float64(v.width-1)+0.5)))
+	y := max(0, min(v.height-1, int(ny*float64(v.height-1)+0.5)))
+	v.enqueue(pointerEvent{kind: pointerDown, x: x, y: y})
+}
+func (v *emulatorViewer) SyncTouchMove(nx, ny float64) {
+	if v.width <= 0 || v.height <= 0 {
+		return
+	}
+	x := max(0, min(v.width-1, int(nx*float64(v.width-1)+0.5)))
+	y := max(0, min(v.height-1, int(ny*float64(v.height-1)+0.5)))
+	v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
+}
+func (v *emulatorViewer) SyncTouchUp()                    { v.enqueue(pointerEvent{kind: pointerUp}) }
+func (v *emulatorViewer) SyncKey(usage uint16, down bool) { v.handleHostKey(usage, down) }
+func (v *emulatorViewer) SyncNavigate(action display.Action) {
+	v.enqueue(pointerEvent{kind: navigate, action: action})
+}
+
+func (v *emulatorViewer) handleDroppedFiles(paths []string) {
+	v.message = fmt.Sprintf("正在处理拖入的 %d 个文件…", len(paths))
+	v.render()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		m, err := selectedManager(v.name)
+		var inst avd.Instance
+		if err == nil {
+			inst, err = m.Ready(ctx)
 		}
-		if v.inputError != "" {
-			message = v.inputError
+		if err == nil {
+			var apks []string
+			var others []string
+			for _, p := range paths {
+				if strings.EqualFold(filepath.Ext(p), ".apk") {
+					apks = append(apks, p)
+				} else {
+					others = append(others, p)
+				}
+			}
+			if len(apks) > 0 {
+				err = m.InstallAPKs(ctx, inst, apks, true)
+			}
+			for _, f := range others {
+				if err == nil {
+					_, err = m.ImportFile(ctx, inst, f)
+				}
+			}
 		}
-		ui.Text(c, message).FontSize(12).TextColor(t.TextMuted)
-		if v.mappingError != "" {
-			ui.Text(c, v.mappingError).FontSize(12).TextColor(t.TextMuted)
-		}
-		if v.keymap != nil {
-			text := fmt.Sprintf("游戏键位：%d 个", len(v.bindings))
-			if v.joystick != nil {
-				text += fmt.Sprintf(" · WASD 摇杆半径 %.0f%%", v.joystick.Radius*100)
+		v.app.post(func() {
+			if err != nil {
+				v.message = "拖入处理失败：" + err.Error()
+			} else {
+				v.message = "拖入文件处理完成"
 			}
-			if v.editing == 1 {
-				text = "点击画面位置，再按需要绑定的键；按完成结束"
-				if v.pendingPoint != nil {
-					text = "已选择位置，请按需要绑定的键"
-				}
-			}
-			if v.editing == 2 {
-				text = "点击画面后按要删除的键；按完成结束"
-			}
-			if v.editing == 3 {
-				text = "点击画面中游戏方向摇杆的中心"
-			}
-			ui.Text(c, text).FontSize(12).TextColor(t.TextMuted)
-		}
-		ui.Row(c).Gap(6).Children(func() {
-			for _, item := range []struct {
-				label  string
-				action display.Action
-			}{{"返回", display.Back}, {"主页", display.Home}, {"最近任务", display.Overview}, {"音量−", display.VolumeDown}, {"音量+", display.VolumeUp}} {
-				item := item
-				if ui.Button(c.Key("nav-"+item.label), item.label).Clicked() {
-					v.releaseHostInput()
-					v.inputError = ""
-					v.enqueue(pointerEvent{kind: navigate, action: item.action})
-				}
-			}
-			if ui.Button(c.Key("fullscreen"), "全屏").Clicked() && v.win != nil {
-				v.releaseHostInput()
-				v.win.ToggleFullScreen()
-			}
-			if ui.Button(c.Key("save-screenshot"), "截图").Clicked() {
-				v.saveScreenshot()
-			}
-			if v.keymap != nil {
-				label := "编辑键位"
-				if v.editing != 0 {
-					label = "完成键位"
-				}
-				if ui.Button(c.Key("edit-keymap"), label).Clicked() {
-					v.releaseHostInput()
-					v.pendingPoint = nil
-					v.mappingError = ""
-					if v.editing != 0 {
-						v.editing = 0
-					} else {
-						v.editing = 1
-					}
-				}
-				if v.editing != 0 && ui.Button(c.Key("remove-keymap"), "删除键位").Clicked() {
-					v.pendingPoint = nil
-					v.editing = 2
-					v.screen.Focus(c)
-				}
-			}
+			v.render()
 		})
-		ui.Row(c).Gap(6).Children(func() {
-			selected := fmt.Sprintf("%d FPS", v.currentCaptureRate())
-			if ui.Select(c.Key("capture-rate"), &selected, []string{"15 FPS", "30 FPS", "60 FPS", "120 FPS"}).Label("截图采样上限").Changed() {
-				var rate int
-				if _, err := fmt.Sscanf(selected, "%d FPS", &rate); err == nil {
-					v.setCaptureRate(rate)
-				}
-			}
-			fitSelected := v.fitMode.String()
-			if ui.Select(c.Key("fit-mode"), &fitSelected, []string{"适应", "铺满", "拉伸"}).Label("画面缩放").Changed() {
-				switch fitSelected {
-				case "铺满":
-					v.fitMode = display.FitCover
-				case "拉伸":
-					v.fitMode = display.FitStretch
-				default:
-					v.fitMode = display.FitContain
-				}
-			}
-			if _, ok := v.source.(display.FrameStreamer); ok && os.Getenv("NEKO_EXPERIMENTAL_STREAM") == "1" {
-				ui.Text(c, "实验画面流按此上限呈现；上游仍可能产生更多画面").FontSize(12).TextColor(t.TextMuted)
-			}
-		})
-		if v.keymap != nil && v.editing != 0 {
-			ui.Row(c).Gap(6).Children(func() {
-				selected := v.activeProfile()
-				if ui.Select(c.Key("keymap-profile"), &selected, v.profileChoices()).Label("键位方案").Changed() && selected != v.activeProfile() {
-					if err := v.switchKeymapProfile(selected); err != nil {
-						v.mappingError = err.Error()
-					} else {
-						v.mappingError = ""
-					}
-				}
-				ui.TextInput(c.Key("keymap-profile-name"), &v.profileName).Placeholder("新方案名称").Label("新方案名称").Width(150)
-				if ui.Button(c.Key("create-keymap-profile"), "保存为新方案").Clicked() {
-					if err := v.createKeymapProfile(v.profileName); err != nil {
-						v.mappingError = err.Error()
-					} else {
-						v.mappingError = ""
-						v.profileName = ""
-					}
-				}
-			})
-			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c.Key("set-joystick"), "设置 WASD 摇杆").Clicked() {
-					v.editing = 3
-					v.pendingPoint = nil
-					v.mappingError = ""
-				}
-				if v.joystick != nil {
-					if ui.Button(c.Key("remove-joystick"), "删除摇杆").Clicked() {
-						if err := v.setJoystick(nil); err != nil {
-							v.mappingError = err.Error()
-						} else {
-							v.mappingError = ""
-							v.editing = 1
-						}
-					}
-					for _, option := range []struct {
-						label string
-						delta float64
-					}{{"缩小摇杆", -0.02}, {"放大摇杆", 0.02}} {
-						option := option
-						if ui.Button(c.Key(option.label), option.label).Clicked() {
-							stick := *v.joystick
-							stick.Radius = math.Max(0.04, math.Min(0.25, stick.Radius+option.delta))
-							if err := v.setJoystick(&stick); err != nil {
-								v.mappingError = err.Error()
-							} else {
-								v.mappingError = ""
-							}
-						}
-					}
-				}
-			})
+	}()
+}
+
+func (v *emulatorViewer) saveScreenshot() {
+	go func() {
+		frame, err := v.source.Capture(nil)
+		if err != nil {
+			return
 		}
-		canvas := ui.Box(c.Key("screen")).WidthPercent(100).Grow(1).Focusable().AutoFocus().Bind(&v.screen)
-		canvas.Draw(func(p *ui.Painter, r ui.Rect) {
-			if v.bitmap != nil {
-				p.Image(v.bitmap, r, painterFit(v.fitMode))
+		dir := filepath.Join(os.Getenv("USERPROFILE"), "Pictures", "NekoSimulator233")
+		_ = os.MkdirAll(dir, 0o700)
+		name := filepath.Join(dir, fmt.Sprintf("neko-%s.png", time.Now().Format("20060102-150405")))
+		if f, err := os.Create(name); err == nil {
+			_ = png.Encode(f, frame)
+			_ = f.Close()
+			v.app.post(func() { v.message = "截图已保存：" + name; v.render() })
+		}
+	}()
+}
+
+func (v *emulatorViewer) runADBTask(label string, fn func(context.Context, avd.Manager, avd.Instance) error) {
+	v.message = label + "…"
+	v.render()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		m, err := selectedManager(v.name)
+		var inst avd.Instance
+		if err == nil {
+			inst, err = m.Ready(ctx)
+		}
+		if err == nil {
+			err = fn(ctx, m, inst)
+		}
+		v.app.post(func() {
+			if err != nil {
+				v.message = label + "失败：" + err.Error()
+			} else {
+				v.message = label + "完成"
 			}
-			if v.editing != 0 {
-				drawKeymapOverlay(p, r, v.width, v.height, v.bindings, v.joystick, v.pendingPoint)
-			}
+			v.render()
 		})
-		canvas.HandleInput(func(ev ui.InputEvent) bool {
-			bounds := v.screen.Bounds(c)
-			switch ev.Kind {
-			case ui.InputKeyDown:
-				delete(v.previewKeys, uint16(ev.Code))
-				return v.handleHostKey(uint16(ev.Code), true)
-			case ui.InputKeyUp:
-				delete(v.previewKeys, uint16(ev.Code))
-				return v.handleHostKey(uint16(ev.Code), false)
-			case ui.InputPointerDown:
-				if ev.Button != 0 {
-					return false
-				}
-				if v.previewHeld {
-					v.previewHeld = false
-					if v.held {
-						v.held = false
-						v.enqueue(pointerEvent{kind: pointerUp})
-					}
-				}
-				x, y, ok := fitPoint(v.fitMode, ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, false)
-				if !ok {
-					return false
-				}
-				if v.editing != 0 {
-					if v.editing == 1 {
-						v.pendingPoint = &mappedPoint{X: float64(x) / float64(max(1, v.width-1)), Y: float64(y) / float64(max(1, v.height-1))}
-					}
-					if v.editing == 3 {
-						radius := 0.12
-						if v.joystick != nil {
-							radius = v.joystick.Radius
-						}
-						stick := &joystickConfig{Center: mappedPoint{X: float64(x) / float64(max(1, v.width-1)), Y: float64(y) / float64(max(1, v.height-1))}, Radius: radius}
-						if err := v.setJoystick(stick); err != nil {
-							v.mappingError = err.Error()
-						} else {
-							v.mappingError = ""
-							v.editing = 1
-						}
-					}
-					v.screen.Focus(c)
-					return true
-				}
-				v.inputError = ""
-				v.held = true
-				v.enqueue(pointerEvent{kind: pointerDown, x: x, y: y})
-				return true
-			case ui.InputPointerMove:
-				if !v.held {
-					return false
-				}
-				x, y, ok := fitPoint(v.fitMode, ev.X, ev.Y, bounds.W, bounds.H, v.width, v.height, true)
-				if ok {
-					v.enqueue(pointerEvent{kind: pointerMove, x: x, y: y})
-				}
-				return true
-			case ui.InputPointerUp:
-				if !v.held {
-					return false
-				}
-				v.held = false
-				v.enqueue(pointerEvent{kind: pointerUp})
-				return true
-			}
-			return false
-		})
+	}()
+}
+
+func (v *emulatorViewer) buildView() *scene.Node {
+	children := []*scene.Node{v.buildTopChromeBar()}
+	if v.drawerOpen {
+		children = append(children, v.buildDrawer())
+	}
+	children = append(children, v.buildViewport())
+
+	return scene.Div(1, children...).Style(&scene.Style{
+		Display:       scene.DisplayFlex.Enum(),
+		FlexDirection: scene.FlexColumn.Enum(),
+		Width:         scene.Percent(100),
+		Height:        scene.Percent(100),
+		Background:    scene.RGB(colBlack),
+		FontFamily:    scene.Ptr[string](uiFontFamily),
 	})
+}
+
+func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
+	// Left: Chrome-style tab strip (Home tab + dynamic running Android app tabs)
+	homeActive := v.activeAppPkg == ""
+	homeBg := uint32(colTabStripBg)
+	if homeActive {
+		homeBg = colTabActiveBg
+	}
+	tabs := []*scene.Node{
+		scene.Div(eid(),
+			rasterIcon(v.app.icons.Logo, 18),
+			labelText(v.name, 12, colTextPrimary, homeActive),
+		).Focusable(0).OnClick(v.click(func() {
+			v.activeAppPkg = ""
+			v.enqueue(pointerEvent{kind: navigate, action: display.Home})
+			v.app.syncHub.BroadcastNavigate(v.name, display.Home)
+			v.render()
+		})).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexRow.Enum(),
+			AlignItems:    scene.AlignCenter.Enum(),
+			Gap:           scene.Pixels(6),
+			Height:        scene.Pixels(32),
+			Padding:       &scene.Edges{Left: scene.Pixels(10), Right: scene.Pixels(12)},
+			Background:    scene.RGB(homeBg),
+			CornerRadius:  scene.Ptr[float32](8),
+			Cursor:        scene.CursorPointer.Enum(),
+		}),
+	}
+
+	for _, ra := range v.runningApps {
+		appItem := ra
+		active := v.activeAppPkg == appItem.Package
+		bg := uint32(colTabStripBg)
+		if active {
+			bg = colTabActiveBg
+		}
+		tabs = append(tabs, scene.Div(eid(),
+			scene.Div(eid(),
+				labelText(appItem.Label, 12, colTextPrimary, active),
+			).Focusable(0).OnClick(v.click(func() {
+				v.activeAppPkg = appItem.Package
+				v.runADBTask("切换 "+appItem.Label, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+					return m.LaunchApp(ctx, inst, appItem.Package)
+				})
+			})).Style(&scene.Style{Cursor: scene.CursorPointer.Enum()}),
+			scene.Div(eid(), svgIcon(v.app.icons.Close, 11, colTextMuted)).
+				Focusable(0).
+				OnClick(v.click(func() {
+					v.runADBTask("关闭 "+appItem.Label, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+						return m.CloseApp(ctx, inst, appItem.Package)
+					})
+				})).
+				Style(&scene.Style{Padding: scene.Padding(2), CornerRadius: scene.Ptr[float32](4), Cursor: scene.CursorPointer.Enum()}).
+				Hover(&scene.Style{Background: scene.RGB(colBgHover)}),
+		).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexRow.Enum(),
+			AlignItems:    scene.AlignCenter.Enum(),
+			Gap:           scene.Pixels(6),
+			Height:        scene.Pixels(32),
+			Padding:       &scene.Edges{Left: scene.Pixels(10), Right: scene.Pixels(6)},
+			Background:    scene.RGB(bg),
+			CornerRadius:  scene.Ptr[float32](8),
+		}))
+	}
+
+	toolIcon := func(icon *client.Resource, active bool, tip string, fn func()) *scene.Node {
+		fg := uint32(colTextPrimary)
+		bg := uint32(colTabStripBg)
+		if active {
+			fg = colPrimaryBlue
+			bg = colBgHover
+		}
+		return scene.Div(eid(), svgIcon(icon, 16, fg)).
+			Focusable(0).
+			OnClick(v.click(fn)).
+			Accessible(tip, &scene.Accessibility{Role: scene.RoleButton}).
+			Style(&scene.Style{
+				Display:        scene.DisplayFlex.Enum(),
+				AlignItems:     scene.AlignCenter.Enum(),
+				JustifyContent: scene.JustifyCenter.Enum(),
+				Width:          scene.Pixels(30),
+				Height:         scene.Pixels(30),
+				Background:     scene.RGB(bg),
+				CornerRadius:   scene.Ptr[float32](6),
+				Cursor:         scene.CursorPointer.Enum(),
+			}).Hover(&scene.Style{Background: scene.RGB(colBgHover)})
+	}
+
+	volIcon := v.app.icons.Volume
+	if v.muted {
+		volIcon = v.app.icons.Mute
+	}
+
+	rightTools := scene.Div(eid(),
+		toolIcon(v.app.icons.Sync, v.app.syncHub.ActiveFor(v.name), "多开同步", func() {
+			if v.app.syncHub.ActiveFor(v.name) {
+				v.app.syncHub.Stop()
+			} else {
+				v.app.syncHub.Start(v.name)
+			}
+			v.render()
+		}),
+		toolIcon(v.app.icons.Keymap, v.editing != 0, "键鼠映射", func() {
+			if v.editing != 0 {
+				v.editing = 0
+			} else {
+				v.editing = 1
+				v.drawerOpen = true
+				v.drawerTab = "keymap"
+			}
+			v.render()
+		}),
+		toolIcon(volIcon, v.muted, "静音/取消静音", func() {
+			v.muted = !v.muted
+			mute := v.muted
+			v.runADBTask("音量设置", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.SetMusicMute(ctx, inst.Serial, mute)
+			})
+		}),
+		toolIcon(v.app.icons.Back, false, "返回", func() {
+			v.enqueue(pointerEvent{kind: navigate, action: display.Back})
+			v.app.syncHub.BroadcastNavigate(v.name, display.Back)
+		}),
+		toolIcon(v.app.icons.More, v.drawerOpen, "更多工具", func() {
+			v.drawerOpen = !v.drawerOpen
+			v.render()
+		}),
+	).Style(&scene.Style{
+		Display:       scene.DisplayFlex.Enum(),
+		FlexDirection: scene.FlexRow.Enum(),
+		AlignItems:    scene.AlignCenter.Enum(),
+		Gap:           scene.Pixels(4),
+		FlexShrink:    scene.Ptr[float32](0),
+	})
+
+	return scene.Div(eid(),
+		scene.Div(eid(), tabs...).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexRow.Enum(),
+			AlignItems:    scene.AlignCenter.Enum(),
+			Gap:           scene.Pixels(4),
+			FlexGrow:      scene.Ptr[float32](1),
+			OverflowX:     scene.OverflowHidden.Enum(),
+		}),
+		rightTools,
+	).Style(&scene.Style{
+		Display:        scene.DisplayFlex.Enum(),
+		FlexDirection:  scene.FlexRow.Enum(),
+		AlignItems:     scene.AlignCenter.Enum(),
+		JustifyContent: scene.JustifySpaceBetween.Enum(),
+		Width:          scene.Percent(100),
+		Height:         scene.Pixels(topBarHeight),
+		Padding:        &scene.Edges{Left: scene.Pixels(8), Right: scene.Pixels(8)},
+		Background:     scene.RGB(colTabStripBg),
+		BorderWidth:    scene.Ptr[float32](1),
+		BorderColor:    scene.RGB(colBorderLight),
+		FlexShrink:     scene.Ptr[float32](0),
+	})
+}
+
+func (v *emulatorViewer) buildDrawer() *scene.Node {
+	tabBtn := func(id, title string) *scene.Node {
+		active := v.drawerTab == id
+		bg, fg := uint32(colBgCard), uint32(colTextMuted)
+		if active {
+			bg, fg = colPrimaryBlue, colWhite
+		}
+		return pillButton(title, v.click(func() { v.drawerTab = id; v.render() }), bg, colBgHover, fg, colBorderLight)
+	}
+	header := scene.Div(eid(),
+		tabBtn("tools", "常用工具"),
+		tabBtn("apps", "应用管理"),
+		tabBtn("keymap", "键鼠映射"),
+		tabBtn("macro", "操作宏"),
+		tabBtn("sync", "多开同步"),
+		tabBtn("sensor", "定位/传感器"),
+		tabBtn("network", "网络/ADB"),
+		labelText(v.message, 12, colTextMuted, false),
+	).Style(&scene.Style{
+		Display:       scene.DisplayFlex.Enum(),
+		FlexDirection: scene.FlexRow.Enum(),
+		AlignItems:    scene.AlignCenter.Enum(),
+		Gap:           scene.Pixels(6),
+		FlexWrap:      scene.Ptr(true),
+	})
+
+	var body *scene.Node
+	switch v.drawerTab {
+	case "apps":
+		body = v.buildAppsDrawer()
+	case "keymap":
+		body = v.buildKeymapDrawer()
+	case "macro":
+		body = v.buildMacroDrawer()
+	case "sync":
+		body = v.buildSyncDrawer()
+	case "sensor":
+		body = v.buildSensorDrawer()
+	case "network":
+		body = v.buildNetworkDrawer()
+	default:
+		body = v.buildToolsDrawer()
+	}
+
+	return scene.Div(eid(), header, body).Style(&scene.Style{
+		Display:       scene.DisplayFlex.Enum(),
+		FlexDirection: scene.FlexColumn.Enum(),
+		Width:         scene.Percent(100),
+		Height:        scene.Pixels(drawerBarHeight),
+		Padding:       scene.Padding(10),
+		Gap:           scene.Pixels(8),
+		Background:    scene.RGB(colBgCard),
+		BorderWidth:   scene.Ptr[float32](1),
+		BorderColor:   scene.RGB(colBorderLight),
+		OverflowY:     scene.OverflowScroll.Enum(),
+		FlexShrink:    scene.Ptr[float32](0),
+	})
+}
+
+func (v *emulatorViewer) buildToolsDrawer() *scene.Node {
+	return scene.Div(eid(),
+		pillButton("主页", v.click(func() { v.enqueue(pointerEvent{kind: navigate, action: display.Home}) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("最近任务", v.click(func() { v.enqueue(pointerEvent{kind: navigate, action: display.Overview}) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("音量+", v.click(func() { v.enqueue(pointerEvent{kind: navigate, action: display.VolumeUp}) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("音量−", v.click(func() { v.enqueue(pointerEvent{kind: navigate, action: display.VolumeDown}) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("截图", v.click(v.saveScreenshot), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+		pillButton("旋转屏幕", v.click(func() {
+			v.landscape = !v.landscape
+			land := v.landscape
+			v.runADBTask("旋转屏幕", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.RotateDisplay(ctx, inst, land)
+			})
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton(fmt.Sprintf("置顶：%v", v.topmost), v.click(func() {
+			v.topmost = !v.topmost
+			setWindowTopmostByTitle(v.title, v.topmost)
+			v.render()
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("全屏", v.click(func() { _ = v.win.ToggleFullscreen(v.app.ctx) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("共享文件夹", v.click(func() { _ = openSharedFolder(v.name) }), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("安装 APK…", v.click(func() {
+			_, _ = v.app.cli.PromptPaths(v.app.ctx, &client.PathPrompt{Files: true, Multiple: true, Prompt: "选择 APK"}, func(_ context.Context, res *client.PathResult) error {
+				if res != nil && !res.Cancelled && len(res.Paths) > 0 {
+					v.handleDroppedFiles(res.Paths)
+				}
+				return nil
+			})
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("导入文件…", v.click(func() {
+			_, _ = v.app.cli.PromptPaths(v.app.ctx, &client.PathPrompt{Files: true, Multiple: true, Prompt: "选择要导入的文件"}, func(_ context.Context, res *client.PathResult) error {
+				if res != nil && !res.Cancelled && len(res.Paths) > 0 {
+					v.handleDroppedFiles(res.Paths)
+				}
+				return nil
+			})
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("缩放: "+v.fitMode.String(), v.click(func() {
+			switch v.fitMode {
+			case display.FitContain:
+				v.fitMode = display.FitCover
+			case display.FitCover:
+				v.fitMode = display.FitStretch
+			default:
+				v.fitMode = display.FitContain
+			}
+			v.render()
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton(fmt.Sprintf("帧率: %d", v.captureRate.Load()), v.click(func() {
+			cur := v.captureRate.Load()
+			next := int32(60)
+			if cur == 15 {
+				next = 30
+			} else if cur == 30 {
+				next = 60
+			} else if cur == 60 {
+				next = 120
+			} else {
+				next = 15
+			}
+			v.captureRate.Store(next)
+			select {
+			case v.rateChanged <- struct{}{}:
+			default:
+			}
+			v.render()
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("发送宿主机剪贴板", v.click(func() {
+			if txt, err := v.app.cli.ClipboardText(v.app.ctx); err == nil {
+				if ctrl, ok := v.source.(*avd.Controller); ok {
+					_ = ctrl.SetClipboard(txt)
+					v.message = "已同步剪贴板到 Android"
+					v.render()
+				}
+			}
+		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+	).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildKeymapDrawer() *scene.Node {
+	editLabel := "开启点击绑定"
+	if v.editing == 1 {
+		editLabel = "退出键位编辑"
+	}
+	profileRow := []*scene.Node{
+		labelText(fmt.Sprintf("方案：%s（%d 键）", v.profile, len(v.bindings)), 12, colTextPrimary, true),
+	}
+	for _, p := range v.profiles {
+		prof := p
+		bg, fg := uint32(colBgSubtle), uint32(colTextPrimary)
+		if prof == v.profile {
+			bg, fg = colPrimaryBlue, colWhite
+		}
+		profileRow = append(profileRow, pillButton(prof, v.click(func() {
+			_ = v.switchKeymapProfile(prof)
+			v.render()
+		}), bg, colBgHover, fg, 0))
+	}
+	return scene.Div(eid(),
+		scene.Div(eid(), profileRow...).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)}),
+		scene.Div(eid(),
+			pillButton(editLabel, v.click(func() {
+				if v.editing != 0 {
+					v.editing = 0
+				} else {
+					v.editing = 1
+				}
+				v.pendingPoint = nil
+				v.render()
+			}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+			pillButton("删除键位模式", v.click(func() { v.editing = 2; v.pendingPoint = nil; v.render() }), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("放置 WASD 摇杆", v.click(func() { v.editing = 3; v.pendingPoint = nil; v.message = "点击画面中摇杆中心"; v.render() }), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("FPS 射击预设", v.click(func() {
+				_ = v.setJoystick(&joystickConfig{Center: mappedPoint{X: 0.18, Y: 0.72}, Radius: 0.11})
+				_ = v.setBinding(0x2c, &mappedPoint{X: 0.85, Y: 0.78}) // Space -> Jump
+				_ = v.setBinding(0x15, &mappedPoint{X: 0.78, Y: 0.85}) // R -> Reload
+				_ = v.setBinding(0x09, &mappedPoint{X: 0.88, Y: 0.60}) // F -> Fire/Interact
+				v.message = "已应用 FPS 射击键位预设"
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("MOBA 预设", v.click(func() {
+				_ = v.setJoystick(&joystickConfig{Center: mappedPoint{X: 0.16, Y: 0.74}, Radius: 0.11})
+				_ = v.setBinding(0x14, &mappedPoint{X: 0.72, Y: 0.82}) // Q
+				_ = v.setBinding(0x08, &mappedPoint{X: 0.80, Y: 0.70}) // E
+				_ = v.setBinding(0x15, &mappedPoint{X: 0.88, Y: 0.60}) // R
+				v.message = "已应用 MOBA 键位预设"
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("清除摇杆", v.click(func() { _ = v.setJoystick(nil); v.render() }), colRedBg, colRedBg, colRedText, 0),
+			scene.TextInput(idProfileInput, v.profileIn, scene.TextInputOptions{Placeholder: "新方案名称", OnChange: v.hProfileIn}).
+				Style(&scene.Style{Width: scene.Pixels(110), Padding: scene.Padding(5), Background: scene.RGB(colBgPage), BorderWidth: scene.Ptr[float32](1), BorderColor: scene.RGB(colBorderLight), CornerRadius: scene.Ptr[float32](6), FontSize: scene.Ptr[float32](12)}),
+			pillButton("保存为新方案", v.click(func() {
+				_ = v.createKeymapProfile(v.profileIn.Value)
+				v.profileIn.Reset("")
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)}),
+	).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexColumn.Enum(), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildMacroDrawer() *scene.Node {
+	recBtn := pillButton("开始录制", v.click(func() { v.recorder.Start(); v.render() }), colPrimaryBlue, colPrimaryHover, colWhite, 0)
+	if v.recorder.Active() {
+		recBtn = pillButton(fmt.Sprintf("停止并保存 (%d)", v.recorder.Count()), v.click(func() {
+			name := strings.TrimSpace(v.macroNameIn.Value)
+			if name == "" {
+				name = "macro-" + time.Now().Format("150405")
+			}
+			sc := v.recorder.Stop(name)
+			if err := v.app.macroStore.Save(sc); err != nil {
+				v.message = err.Error()
+			} else {
+				v.macros, _ = v.app.macroStore.List()
+				v.macroNameIn.Reset("")
+				v.message = "宏已保存：" + name
+			}
+			v.render()
+		}), colRedBg, colRedBg, colRedText, 0)
+	}
+	rows := []*scene.Node{
+		scene.Div(eid(),
+			scene.TextInput(idMacroNameInput, v.macroNameIn, scene.TextInputOptions{Placeholder: "宏脚本名称", OnChange: v.hMacroIn}).
+				Style(&scene.Style{Width: scene.Pixels(140), Padding: scene.Padding(5), Background: scene.RGB(colBgPage), BorderWidth: scene.Ptr[float32](1), BorderColor: scene.RGB(colBorderLight), CornerRadius: scene.Ptr[float32](6), FontSize: scene.Ptr[float32](12)}),
+			recBtn,
+			pillButton(fmt.Sprintf("循环: %dx", v.macroLoops), v.click(func() {
+				if v.macroLoops == 1 {
+					v.macroLoops = 3
+				} else if v.macroLoops == 3 {
+					v.macroLoops = 10
+				} else {
+					v.macroLoops = 1
+				}
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton(fmt.Sprintf("倍速: %.1fx", v.macroSpeed), v.click(func() {
+				if v.macroSpeed == 1.0 {
+					v.macroSpeed = 2.0
+				} else if v.macroSpeed == 2.0 {
+					v.macroSpeed = 0.5
+				} else {
+					v.macroSpeed = 1.0
+				}
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)}),
+	}
+	for _, m := range v.macros {
+		sc := m
+		rows = append(rows, scene.Div(eid(),
+			labelText(fmt.Sprintf("%s (%d事件, %.1fs)", sc.Name, len(sc.Events), float64(sc.DurationMS)/1000), 12, colTextPrimary, false),
+			pillButton("播放", v.click(func() {
+				if v.replayCancel != nil {
+					v.replayCancel()
+				}
+				ctx, cancel := context.WithCancel(v.app.ctx)
+				v.replayCancel = cancel
+				loops, speed := v.macroLoops, v.macroSpeed
+				go func() {
+					_ = macro.Replay(ctx, sc, macro.ReplayOptions{Loops: loops, Speed: speed}, func(ev macro.Event) error {
+						switch ev.Kind {
+						case macro.EventTouchDown:
+							v.SyncTouchDown(ev.NX, ev.NY)
+						case macro.EventTouchMove:
+							v.SyncTouchMove(ev.NX, ev.NY)
+						case macro.EventTouchUp:
+							v.SyncTouchUp()
+						case macro.EventKeyDown:
+							v.handleHostKey(ev.Usage, true)
+						case macro.EventKeyUp:
+							v.handleHostKey(ev.Usage, false)
+						}
+						return nil
+					})
+				}()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("删除", v.click(func() {
+				_ = v.app.macroStore.Delete(sc.Name)
+				v.macros, _ = v.app.macroStore.List()
+				v.render()
+			}), colRedBg, colRedBg, colRedText, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)}))
+	}
+	return scene.Div(eid(), rows...).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexColumn.Enum(), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildSyncDrawer() *scene.Node {
+	peers := v.app.syncHub.Peers(v.name)
+	nodes := []*scene.Node{
+		pillButton(func() string {
+			if v.app.syncHub.ActiveFor(v.name) {
+				return "停止以此窗口为主控同步"
+			}
+			return "开始以此窗口为主控同步"
+		}(), v.click(func() {
+			if v.app.syncHub.ActiveFor(v.name) {
+				v.app.syncHub.Stop()
+			} else {
+				v.app.syncHub.Start(v.name)
+			}
+			v.render()
+		}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+	}
+	if len(peers) == 0 {
+		nodes = append(nodes, labelText("当前没有其他已打开的模拟器窗口", 12, colTextMuted, false))
+	}
+	for _, peer := range peers {
+		p := peer
+		sel := v.app.syncHub.IsSelected(p)
+		lbl := "[ ] " + p
+		if sel {
+			lbl = "[✓] " + p
+		}
+		nodes = append(nodes, pillButton(lbl, v.click(func() {
+			v.app.syncHub.SetSelected(p, !sel)
+			v.render()
+		}), colBgSubtle, colBgHover, colTextPrimary, 0))
+	}
+	return scene.Div(eid(), nodes...).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildSensorDrawer() *scene.Node {
+	nodes := []*scene.Node{
+		pillButton("摇一摇", v.click(func() {
+			v.runADBTask("摇一摇", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.Shake(ctx, inst)
+			})
+		}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+	}
+	for _, p := range avd.GPSPresets() {
+		preset := p
+		nodes = append(nodes, pillButton("定位:"+preset.Name, v.click(func() {
+			v.runADBTask("虚拟定位 "+preset.Name, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.SetGPSLocation(ctx, inst, preset.Lat, preset.Lon, 10)
+			})
+		}), colBgSubtle, colBgHover, colTextPrimary, 0))
+	}
+	for _, br := range []int{25, 50, 80, 100} {
+		pct := br
+		nodes = append(nodes, pillButton(fmt.Sprintf("亮度 %d%%", pct), v.click(func() {
+			v.runADBTask("屏幕亮度", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.SetBrightness(ctx, inst, pct)
+			})
+		}), colBgSubtle, colBgHover, colTextPrimary, 0))
+	}
+	return scene.Div(eid(), nodes...).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildAppsDrawer() *scene.Node {
+	rows := []*scene.Node{
+		scene.Div(eid(),
+			labelText(fmt.Sprintf("已运行应用 %d 个 / 第三方包 %d 个", len(v.runningApps), len(v.installedApps)), 12, colTextPrimary, true),
+			pillButton("刷新应用列表", v.click(func() {
+				go func() {
+					m, err := selectedManager(v.name)
+					if err != nil {
+						return
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					pkgs, _ := m.ListApps(ctx, avd.Instance{Serial: v.serial, Name: v.name})
+					cancel()
+					v.app.post(func() {
+						v.installedApps = pkgs
+						v.render()
+					})
+				}()
+			}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(8)}),
+	}
+	for _, pkg := range v.installedApps {
+		pkgName := pkg
+		rows = append(rows, scene.Div(eid(),
+			labelText(pkgName, 12, colTextPrimary, false),
+			pillButton("启动", v.click(func() {
+				v.runADBTask("启动 "+pkgName, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+					return m.LaunchApp(ctx, inst, pkgName)
+				})
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("强行停止", v.click(func() {
+				v.runADBTask("停止 "+pkgName, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+					return m.CloseApp(ctx, inst, pkgName)
+				})
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("清数据", v.click(func() {
+				v.runADBTask("清数据 "+pkgName, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+					return m.ClearAppData(ctx, inst, pkgName)
+				})
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+			pillButton("卸载", v.click(func() {
+				v.runADBTask("卸载 "+pkgName, func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+					return m.UninstallApp(ctx, inst, pkgName)
+				})
+			}), colRedBg, colRedBg, colRedText, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(6)}))
+	}
+	return scene.Div(eid(), rows...).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexColumn.Enum(), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildNetworkDrawer() *scene.Node {
+	adbMode := v.settings.ADBDebugMode
+	if adbMode == "" {
+		adbMode = "local_connect"
+	}
+	renderer := v.settings.RendererMode
+	if renderer == "" {
+		renderer = "vk"
+	}
+	var ifaces []string
+	if nis, err := net.Interfaces(); err == nil {
+		for _, ni := range nis {
+			if ni.Flags&net.FlagUp != 0 && ni.Flags&net.FlagLoopback == 0 {
+				ifaces = append(ifaces, ni.Name)
+			}
+		}
+	}
+	ifaceStr := "无"
+	if len(ifaces) > 0 {
+		ifaceStr = strings.Join(ifaces, ", ")
+	}
+	return scene.Div(eid(),
+		labelText(fmt.Sprintf("ADB 序列号：%s  |  ADB 调试：%s  |  渲染后端：%s", v.serial, adbMode, renderer), 12, colTextPrimary, true),
+		labelText("宿主机可用桥接网卡："+ifaceStr, 12, colTextMuted, false),
+		scene.Div(eid(),
+			pillButton("打开实例设置（网络/机型/性能）", v.click(func() {
+				v.app.openDeviceSettings(v.name)
+			}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+			pillButton("切换 Root 模式", v.click(func() {
+				v.settings.RootMode = !v.settings.RootMode
+				if m, err := selectedManager(v.name); err == nil {
+					_ = m.SetInstanceSettings(v.settings)
+				}
+				v.message = fmt.Sprintf("Root 模式已设为：%v（重启生效）", v.settings.RootMode)
+				v.render()
+			}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), Gap: scene.Pixels(6)}),
+	).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexColumn.Enum(), Gap: scene.Pixels(6)})
+}
+
+func (v *emulatorViewer) buildViewport() *scene.Node {
+	hViewport := v.interact(v.handleViewportEvent)
+	children := []*scene.Node{}
+
+	if v.frameRes != nil && v.width > 0 && v.height > 0 {
+		vw, vh := v.viewportSize()
+		imgW, imgH := vw, vh
+		if v.fitMode == display.FitContain {
+			scale := math.Min(float64(vw)/float64(v.width), float64(vh)/float64(v.height))
+			imgW = float32(float64(v.width) * scale)
+			imgH = float32(float64(v.height) * scale)
+		}
+		children = append(children, scene.Image(eid(), v.frameRes.Handle()).Style(&scene.Style{
+			Width:  scene.Pixels(imgW),
+			Height: scene.Pixels(imgH),
+		}))
+	} else {
+		children = append(children, labelText(v.message, 14, colTextSubtle, false))
+	}
+
+	if v.editing != 0 {
+		vw, vh := v.viewportSize()
+		children = append(children, buildKeymapOverlayNodes(vw, vh, v.width, v.height, v.bindings, v.joystick, v.pendingPoint)...)
+	}
+
+	if v.settings.ShowFPS {
+		children = append(children, scene.Div(eid(),
+			labelText(fmt.Sprintf("FPS %.0f", v.liveFPS), 11, colGreenText, true),
+		).Style(&scene.Style{
+			Position:     scene.PositionAbsolute.Enum(),
+			Inset:        &scene.Edges{Top: scene.Pixels(8), Right: scene.Pixels(10)},
+			Padding:      &scene.Edges{Top: scene.Pixels(2), Bottom: scene.Pixels(2), Left: scene.Pixels(8), Right: scene.Pixels(8)},
+			Background:   scene.RGB(0x111827),
+			CornerRadius: scene.Ptr[float32](8),
+		}))
+	}
+
+	return scene.Div(idViewerViewport, children...).
+		Focusable(0).
+		Interact(&scene.Interaction{
+			Focusable:   true,
+			MouseDown:   hViewport,
+			MouseUp:     hViewport,
+			MouseMove:   hViewport,
+			Scroll:      hViewport,
+			KeyDown:     hViewport,
+			KeyUp:       hViewport,
+			FileDrop:    hViewport,
+		}).
+		Style(&scene.Style{
+			Position:       scene.PositionRelative.Enum(),
+			Display:        scene.DisplayFlex.Enum(),
+			AlignItems:     scene.AlignCenter.Enum(),
+			JustifyContent: scene.JustifyCenter.Enum(),
+			Width:          scene.Percent(100),
+			FlexGrow:       scene.Ptr[float32](1),
+			Background:     scene.RGB(colBlack),
+			OverflowX:      scene.OverflowHidden.Enum(),
+			OverflowY:      scene.OverflowHidden.Enum(),
+		})
 }

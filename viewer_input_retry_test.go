@@ -9,6 +9,17 @@ import (
 	"github.com/neko233-com/NekoSimulator233/internal/display"
 )
 
+type fakeMultiSession struct{ frames [][]display.TouchPoint }
+
+func (*fakeMultiSession) Capture(dst *image.RGBA) (*image.RGBA, error) { return dst, nil }
+func (*fakeMultiSession) TouchDown(int, int) error                     { return nil }
+func (*fakeMultiSession) TouchUp() error                               { return nil }
+func (*fakeMultiSession) Close() error                                 { return nil }
+func (s *fakeMultiSession) SetTouches(p []display.TouchPoint) error {
+	s.frames = append(s.frames, append([]display.TouchPoint(nil), p...))
+	return nil
+}
+
 type flakyReleaseSession struct {
 	fakeMultiSession
 	keyDowns      int

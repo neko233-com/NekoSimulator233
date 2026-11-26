@@ -119,14 +119,14 @@ func listKeymapProfiles(base string) ([]string, error) {
 	return result, nil
 }
 
-func (v *viewer) activeProfile() string {
+func (v *emulatorViewer) activeProfile() string {
 	if v.profile == "" {
 		return defaultKeymapProfile
 	}
 	return v.profile
 }
 
-func (v *viewer) keymapBase() string {
+func (v *emulatorViewer) keymapBase() string {
 	if v.baseKeymap != "" {
 		return v.baseKeymap
 	}
@@ -136,14 +136,14 @@ func (v *viewer) keymapBase() string {
 	return ""
 }
 
-func (v *viewer) profileChoices() []string {
+func (v *emulatorViewer) profileChoices() []string {
 	if len(v.profiles) == 0 {
 		return []string{defaultKeymapProfile}
 	}
 	return v.profiles
 }
 
-func (v *viewer) switchKeymapProfile(name string) error {
+func (v *emulatorViewer) switchKeymapProfile(name string) error {
 	if v.keymap == nil {
 		return errors.New("键位配置不可用")
 	}
@@ -172,7 +172,7 @@ func (v *viewer) switchKeymapProfile(name string) error {
 	return nil
 }
 
-func (v *viewer) createKeymapProfile(name string) error {
+func (v *emulatorViewer) createKeymapProfile(name string) error {
 	if v.keymap == nil {
 		return errors.New("键位配置不可用")
 	}

@@ -13,9 +13,17 @@
           <File Id="AgentExe" Source="$(var.McpExe)" />
           <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="AgentInstalled" Type="integer" Value="1" KeyPath="yes" />
         </Component>
-        <Component Id="MyGoLicense" Guid="5aece479-89f7-41d2-bd2c-f3d7cf7f87bd">
-          <File Id="MyGoLicenseFile" Name="LICENSE-MyGo.txt" Source="$(var.MyGoLicense)" />
-          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="MyGoLicenseInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <Component Id="CliTool" Guid="c29f8a1e-4b33-4d91-9e6a-7f12b4c8d301">
+          <File Id="CliExe" Source="$(var.CliExe)" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="CliInstalled" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <Component Id="GpuiLicense" Guid="5aece479-89f7-41d2-bd2c-f3d7cf7f87bd">
+          <File Id="GpuiLicenseFile" Name="LICENSE-gpui-go.txt" Source="$(var.GpuiLicense)" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="GpuiLicenseInstalled" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <Component Id="GpuiNotice" Guid="8a1e72c4-5d22-4c71-b869-2d739f4c1099">
+          <File Id="GpuiNoticeFile" Name="NOTICE-gpui-go.txt" Source="$(var.GpuiNotice)" />
+          <RegistryValue Root="HKCU" Key="Software\Neko233\NekoSimulator233" Name="GpuiNoticeInstalled" Type="integer" Value="1" KeyPath="yes" />
         </Component>
         <Component Id="JDKConfigurator" Guid="0fcf920e-0c26-4db6-a542-8677f896fa23">
           <File Id="JDKConfiguratorScript" Name="configure-jdk.ps1" Source="$(var.ConfigureJDK)" />
@@ -38,6 +46,6 @@
         </Component>
       </Directory>
     </StandardDirectory>
-    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="MyGoLicense" /><ComponentRef Id="JDKConfigurator" /><ComponentRef Id="Shortcut" /><?if $(var.IncludeRuntime) = 1 ?><ComponentRef Id="AndroidRuntime" /><?endif?></Feature>
+    <Feature Id="Main"><ComponentRef Id="Application" /><ComponentRef Id="AgentServer" /><ComponentRef Id="CliTool" /><ComponentRef Id="GpuiLicense" /><ComponentRef Id="GpuiNotice" /><ComponentRef Id="JDKConfigurator" /><ComponentRef Id="Shortcut" /><?if $(var.IncludeRuntime) = 1 ?><ComponentRef Id="AndroidRuntime" /><?endif?></Feature>
   </Package>
 </Wix>

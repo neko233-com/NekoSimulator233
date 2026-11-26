@@ -3,11 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unsafe"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/NekoSimulator233/internal/update"
 	"golang.org/x/sys/windows"
 )
@@ -31,7 +32,6 @@ func sessionIdle() (time.Duration, error) {
 
 func idleDuration(now, last uint32) (time.Duration, error) {
 	delta := now - last
-	// A future or ambiguous 32-bit timestamp cannot safely establish idleness.
 	if delta > 0x7fffffff {
 		return 0, errors.New("会话空闲时间不确定")
 	}
@@ -45,6 +45,48 @@ func updateKey(m *update.Manifest) string {
 	return fmt.Sprintf("%d:%s%d:%s%d:%s", len(m.Version), m.Version, len(m.SHA256), m.SHA256, len(m.MSI), m.MSI)
 }
 
+func lookupUpdate(skipOnce bool) (*update.Manifest, string, string) {
+	pending, pendingErr := update.PendingReboot()
+	if pendingErr != nil {
+		return nil, "", "更新状态读取失败: " + pendingErr.Error()
+	}
+	if pending {
+		return nil, "", "更新已安装，请重启 Windows 完成更新"
+	}
+	if skipOnce && len(os.Args) > 1 && os.Args[1] == "--skip-update-once" {
+		b, _ := os.ReadFile(filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "last-update.txt"))
+		return nil, "", string(b)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, "", "更新检查失败: " + err.Error()
+	}
+	installed := filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233", "NekoSimulator233.exe")
+	if !strings.EqualFold(filepath.Clean(executable), filepath.Clean(installed)) {
+		return nil, "", ""
+	}
+	manifest := filepath.Join(os.Getenv("LOCALAPPDATA"), "NekoSimulator233-data", "update.json")
+	m, err := update.Load(manifest, version)
+	if err != nil {
+		return nil, "", "更新检查失败: " + err.Error()
+	}
+	if m == nil {
+		return nil, "", ""
+	}
+	return m, executable, ""
+}
+
+func prepareUpdate() (bool, string) {
+	m, executable, message := lookupUpdate(true)
+	if m == nil {
+		return false, message
+	}
+	if err := update.Start(m, version, executable); err != nil {
+		return false, "更新准备失败: " + err.Error()
+	}
+	return true, ""
+}
+
 type periodicUpdateOps struct {
 	idle        func() (time.Duration, error)
 	lookup      func() (*update.Manifest, string, string)
@@ -54,9 +96,6 @@ type periodicUpdateOps struct {
 
 var errUpdateDeferred = errors.New("自动更新条件已变化")
 
-// attemptPeriodicUpdate is called off the UI thread after the UI is marked
-// busy. All state that can change while lookup runs is checked again before
-// starting the updater; the worker repeats process checks after parent exit.
 func attemptPeriodicUpdate(suppressed string, ops periodicUpdateOps) (bool, string) {
 	idle, err := ops.idle()
 	if err != nil || idle < updateRequiredIdle {
@@ -93,55 +132,4 @@ func attemptPeriodicUpdate(suppressed string, ops periodicUpdateOps) (bool, stri
 		return false, "更新准备失败: " + err.Error()
 	}
 	return true, ""
-}
-
-func (a *app) periodicUpdateEligible() bool {
-	return !a.busy && !a.updateInProgress && a.backupCancel == nil && len(a.viewers) == 0 && len(a.resources) == 0 && len(a.displays) == 0 && strings.TrimSpace(a.newInstance) == ""
-}
-
-func (a *app) startPeriodicUpdates() {
-	done := make(chan struct{})
-	a.window.OnClosed(func() { close(done) })
-	go func() {
-		ticker := time.NewTicker(updateCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				a.window.Update(func() { a.tryPeriodicUpdate() })
-			}
-		}
-	}()
-}
-
-func (a *app) tryPeriodicUpdate() {
-	if !a.periodicUpdateEligible() {
-		return
-	}
-	a.busy, a.updateInProgress = true, true
-	suppressed := a.suppressedUpdate
-	go func() {
-		started, message := attemptPeriodicUpdate(suppressed, periodicUpdateOps{
-			idle:        sessionIdle,
-			lookup:      func() (*update.Manifest, string, string) { return lookupUpdate(false) },
-			checkOthers: update.EnsureNoOtherProcesses,
-			start:       update.StartGuarded,
-		})
-		a.window.Update(func() {
-			a.busy, a.updateInProgress = false, false
-			if message != "" {
-				a.updateMessage = message
-			}
-			if started {
-				mygo.App.Quit()
-				return
-			}
-			if a.closeAfterUpdate {
-				a.closeAfterUpdate = false
-				a.window.Close()
-			}
-		})
-	}()
 }

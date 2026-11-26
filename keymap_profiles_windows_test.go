@@ -8,17 +8,26 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/egoist/mygo/ui"
+	"github.com/neko233-com/NekoSimulator233/internal/syncctl"
 )
 
-func newProfileTestViewer(t *testing.T) *viewer {
+func newProfileTestViewer(t *testing.T) *emulatorViewer {
 	t.Helper()
 	store := &keymapStore{path: filepath.Join(t.TempDir(), "keymap.json")}
 	bindings, err := store.read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &viewer{keymap: store, bindings: bindings, width: 100, height: 100, events: make(chan pointerEvent, 16), done: make(chan struct{})}
+	return &emulatorViewer{
+		app:      &app{syncHub: syncctl.NewHub()},
+		name:     "TestDev",
+		keymap:   store,
+		bindings: bindings,
+		width:    100,
+		height:   100,
+		events:   make(chan pointerEvent, 16),
+		done:     make(chan struct{}),
+	}
 }
 
 func TestKeymapProfilesPreserveAndIsolateBindings(t *testing.T) {
@@ -112,32 +121,5 @@ func TestKeymapProfilesRejectUnsafeAndMissingPaths(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "external user data" {
 		t.Fatal("external profile data changed")
-	}
-}
-
-func TestKeymapProfilesCanBeCreatedAndSwitchedInView(t *testing.T) {
-	v := newProfileTestViewer(t)
-	tester := ui.NewTester(v.view, 900, 600)
-	if err := tester.Click("编辑键位"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click("新方案名称"); err != nil {
-		t.Fatal(err)
-	}
-	tester.Type("GameA")
-	if err := tester.Click("保存为新方案"); err != nil {
-		t.Fatal(err)
-	}
-	if v.activeProfile() != "GameA" {
-		t.Fatalf("new profile not selected: %q, %s", v.activeProfile(), v.mappingError)
-	}
-	if err := tester.Click("键位方案"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tester.Click(defaultKeymapProfile); err != nil {
-		t.Fatal(err)
-	}
-	if v.activeProfile() != defaultKeymapProfile {
-		t.Fatalf("default profile not selected: %q", v.activeProfile())
 	}
 }
