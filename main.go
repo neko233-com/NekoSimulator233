@@ -1158,6 +1158,7 @@ func (a *app) buildSidebar() *scene.Node {
 			JustifyContent: scene.JustifyCenter.Enum(),
 		}),
 		navItem(a.icons.Device, "设备"),
+		navItem(a.icons.Download, "下载"),
 		navItem(a.icons.Remote, "远控"),
 		navItem(a.icons.Tools, "工具"),
 		navItem(a.icons.Settings, "设置"),
@@ -1183,6 +1184,8 @@ func (a *app) buildSidebar() *scene.Node {
 func (a *app) buildMainArea() *scene.Node {
 	var body *scene.Node
 	switch a.sideTab {
+	case "下载":
+		body = a.buildDownloadsView()
 	case "远控":
 		body = a.buildRemoteView()
 	case "工具":
@@ -1740,6 +1743,145 @@ func (a *app) buildDeviceCard(item avd.InstanceSummary, index int) *scene.Node {
 		BorderWidth:   scene.Ptr[float32](1),
 		BorderColor:   scene.RGB(colBorderLight),
 		CornerRadius:  scene.Ptr[float32](12),
+	})
+}
+
+func (a *app) buildDownloadsView() *scene.Node {
+	comps := avd.RuntimeComponentsStatus()
+	compNodes := make([]*scene.Node, 0, len(comps))
+	for _, c := range comps {
+		badgeBg, badgeFg, badgeText := uint32(colBgSubtle), uint32(colTextMuted), "未安装"
+		if c.Ready {
+			badgeBg, badgeFg, badgeText = colGreenBadgeBg, colGreenText, "已就绪"
+		}
+		sub := c.Notes
+		if c.Ready && c.Path != "" {
+			sub = c.Notes + "  ·  " + c.Path
+		}
+		compNodes = append(compNodes, scene.Div(eid(),
+			scene.Div(eid(),
+				labelText(c.Name, 14, colTextPrimary, true),
+				labelText(sub, 12, colTextMuted, false),
+			).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexColumn.Enum(), FlexGrow: scene.Ptr[float32](1), Gap: scene.Pixels(2)}),
+			scene.Div(eid(), labelText(badgeText, 12, badgeFg, true)).Style(&scene.Style{
+				Padding:      &scene.Edges{Top: scene.Pixels(3), Bottom: scene.Pixels(3), Left: scene.Pixels(10), Right: scene.Pixels(10)},
+				Background:   scene.RGB(badgeBg),
+				CornerRadius: scene.Ptr[float32](10),
+			}),
+		).Style(&scene.Style{
+			Display:        scene.DisplayFlex.Enum(),
+			FlexDirection:  scene.FlexRow.Enum(),
+			AlignItems:     scene.AlignCenter.Enum(),
+			JustifyContent: scene.JustifySpaceBetween.Enum(),
+			Padding:        scene.Padding(12),
+			Background:     scene.RGB(colBgCard),
+			BorderWidth:    scene.Ptr[float32](1),
+			BorderColor:    scene.RGB(colBorderLight),
+			CornerRadius:   scene.Ptr[float32](8),
+		}))
+	}
+
+	progressTitle := "所有核心组件就绪后，即可秒开 Android 15 模拟器（2核 4 GB）"
+	pct := a.bootstrapPct
+	if a.bootstrapStage != "" {
+		progressTitle = fmt.Sprintf("正在下载/部署：%s（%d%%）", a.bootstrapStage, pct)
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	return scene.Div(eid(),
+		labelText("下载中心与运行时管理", 20, colTextPrimary, true),
+		scene.Div(eid(),
+			scene.Div(eid(),
+				labelText(progressTitle, 13, colTextPrimary, true),
+				scene.Div(eid(),
+					pillButton("一键部署 / 修复全部运行时", a.click(a.bootstrapAndLaunch), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+					pillButton("取消任务", a.click(func() {
+						if a.sdkCancel != nil {
+							a.sdkCancel()
+						}
+						if a.runtimeCancel != nil {
+							a.runtimeCancel()
+						}
+					}), colBgSubtle, colBgHover, colTextMuted, 0),
+					pillButton("刷新状态", a.click(func() { a.render() }), colBgSubtle, colBgHover, colTextPrimary, 0),
+				).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), Gap: scene.Pixels(8)}),
+			).Style(&scene.Style{
+				Display:        scene.DisplayFlex.Enum(),
+				FlexDirection:  scene.FlexRow.Enum(),
+				AlignItems:     scene.AlignCenter.Enum(),
+				JustifyContent: scene.JustifySpaceBetween.Enum(),
+				Width:          scene.Percent(100),
+			}),
+			scene.Div(eid(),
+				scene.Div(eid()).Style(&scene.Style{
+					Width:        scene.Percent(float32(pct)),
+					Height:       scene.Pixels(6),
+					Background:   scene.RGB(colPrimaryBlue),
+					CornerRadius: scene.Ptr[float32](3),
+				}),
+			).Style(&scene.Style{
+				Width:        scene.Percent(100),
+				Height:       scene.Pixels(6),
+				Background:   scene.RGB(colBgSubtle),
+				CornerRadius: scene.Ptr[float32](3),
+				OverflowX:    scene.OverflowHidden.Enum(),
+			}),
+		).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexColumn.Enum(),
+			Gap:           scene.Pixels(10),
+			Padding:       scene.Padding(14),
+			Background:    scene.RGB(colBgCard),
+			BorderWidth:   scene.Ptr[float32](1),
+			BorderColor:   scene.RGB(colBorderLight),
+			CornerRadius:  scene.Ptr[float32](10),
+		}),
+		scene.Div(eid(), compNodes...).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexColumn.Enum(),
+			Gap:           scene.Pixels(8),
+			OverflowY:     scene.OverflowScroll.Enum(),
+			FlexGrow:      scene.Ptr[float32](1),
+		}),
+		scene.Div(eid(),
+			labelText("自定义离线运行时包（manifest.json）：", 13, colTextPrimary, true),
+			scene.Div(eid(),
+				scene.TextInput(idManifestInput, a.runtimeManifest, scene.TextInputOptions{
+					Placeholder: "输入运行时 manifest.json 的 HTTPS URL 或本地路径…",
+					OnChange:    a.hManifest,
+				}).Style(&scene.Style{
+					FlexGrow:     scene.Ptr[float32](1),
+					Padding:      scene.Padding(8),
+					Background:   scene.RGB(colBgPage),
+					BorderWidth:  scene.Ptr[float32](1),
+					BorderColor:  scene.RGB(colBorderLight),
+					CornerRadius: scene.Ptr[float32](6),
+					FontSize:     scene.Ptr[float32](13),
+				}),
+				pillButton("安装离线运行时", a.click(a.downloadRuntime), colDarkBtn, colDarkBtnHover, colWhite, 0),
+			).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), Gap: scene.Pixels(8), Width: scene.Percent(100)}),
+		).Style(&scene.Style{
+			Display:       scene.DisplayFlex.Enum(),
+			FlexDirection: scene.FlexColumn.Enum(),
+			Gap:           scene.Pixels(8),
+			Padding:       scene.Padding(12),
+			Background:    scene.RGB(colBgCard),
+			BorderWidth:   scene.Ptr[float32](1),
+			BorderColor:   scene.RGB(colBorderLight),
+			CornerRadius:  scene.Ptr[float32](10),
+		}),
+	).Style(&scene.Style{
+		Display:       scene.DisplayFlex.Enum(),
+		FlexDirection: scene.FlexColumn.Enum(),
+		FlexGrow:      scene.Ptr[float32](1),
+		Padding:       scene.Padding(24),
+		Gap:           scene.Pixels(12),
+		OverflowY:     scene.OverflowScroll.Enum(),
 	})
 }
 

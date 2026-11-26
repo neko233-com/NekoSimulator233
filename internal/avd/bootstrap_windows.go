@@ -30,6 +30,37 @@ func DefaultBootstrapSDKRoot() string {
 	return filepath.Join(local, "NekoSimulator233-data", "runtime", "sdk")
 }
 
+// RuntimeComponent describes an auto-downloaded runtime component and its readiness.
+type RuntimeComponent struct {
+	Name  string
+	Ready bool
+	Path  string
+	Notes string
+}
+
+// RuntimeComponentsStatus inspects local Java 17, Android SDK tools, Emulator,
+// and Android 15 / 14 system images for display in the Downloads tab.
+func RuntimeComponentsStatus() []RuntimeComponent {
+	sdkRoot := DefaultBootstrapSDKRoot()
+	if env := strings.TrimSpace(os.Getenv("ANDROID_HOME")); env != "" && fileExists(filepath.Join(env, "emulator", "emulator.exe")) {
+		sdkRoot = env
+	}
+	javaPath, javaErr := sdkManagerJava()
+	_, _, cliErr := sdkManagerTools(sdkRoot)
+	adbPath := filepath.Join(sdkRoot, "platform-tools", "adb.exe")
+	emuPath := filepath.Join(sdkRoot, "emulator", "emulator.exe")
+	img35 := filepath.Join(sdkRoot, "system-images", "android-35", "google_apis", "x86_64", "system.img")
+	img34 := filepath.Join(sdkRoot, "system-images", "android-34", "google_apis", "x86_64", "system.img")
+	return []RuntimeComponent{
+		{Name: "Java 17 运行时 (Temurin)", Ready: javaErr == nil, Path: javaPath, Notes: "用于运行 Android SDK Manager"},
+		{Name: "Android Command-line Tools", Ready: cliErr == nil, Path: filepath.Join(sdkRoot, "cmdline-tools", "latest"), Notes: "官方 SDK 组件包管理器"},
+		{Name: "Android Platform-Tools (ADB)", Ready: fileExists(adbPath), Path: adbPath, Notes: "ADB 调试、应用安装与输入控制"},
+		{Name: "Android Emulator 引擎", Ready: fileExists(emuPath), Path: emuPath, Notes: "硬件虚拟化与 Vulkan GPU 加速引擎"},
+		{Name: "Android 15 (API 35) 系统镜像", Ready: fileExists(img35), Path: img35, Notes: "默认系统版本 (x86_64 Google APIs)"},
+		{Name: "Android 14 (API 34) 系统镜像", Ready: fileExists(img34), Path: img34, Notes: "备用兼容系统版本"},
+	}
+}
+
 // IsMissingSDKError reports whether err indicates the local Android SDK or
 // Command-line Tools are not yet installed.
 func IsMissingSDKError(err error) bool {

@@ -99,6 +99,12 @@ func (m Manager) ListInstances(ctx context.Context) ([]InstanceSummary, error) {
 			item.State, item.Reason = "unknown", "无法检查实例文件"
 		case !dirPresent && !iniPresent:
 			item.State = "not_created"
+			item.API = 35
+			item.Cores = 2
+			item.RAMMiB = 4096
+			item.Width = 1080
+			item.Height = 1920
+			item.Density = 480
 		case !dirPresent || !iniPresent:
 			item.State, item.Reason = "unknown", "实例元数据不完整，已保留文件"
 		default:
