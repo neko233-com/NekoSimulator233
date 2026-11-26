@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"image"
-	"image/png"
+	"image/jpeg"
 	"sync/atomic"
 
 	"github.com/moriyoshi/gpui-go/client"
@@ -99,17 +99,15 @@ func encodeRGBAAsBMP(img *image.RGBA) []byte {
 	return buf
 }
 
-var fastPNGEncoder = &png.Encoder{CompressionLevel: png.NoCompression}
-
-// encodeRGBAAsFastPNG encodes an *image.RGBA as an uncompressed PNG for GPUI
-// ResourceImage, which supports PNG/JPEG/GIF/WebP (not BMP).
-func encodeRGBAAsFastPNG(img *image.RGBA) []byte {
+// encodeRGBAAsFastJPEG encodes an *image.RGBA as a high-quality JPEG (typically
+// 150-400 KB at 1080x1920), keeping well below GPUI's IPC message size limit.
+func encodeRGBAAsFastJPEG(img *image.RGBA) []byte {
 	if img == nil {
 		return nil
 	}
 	var buf bytes.Buffer
-	buf.Grow(img.Bounds().Dx()*img.Bounds().Dy()*4 + 1024)
-	if err := fastPNGEncoder.Encode(&buf, img); err != nil {
+	buf.Grow(256 * 1024)
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 88}); err != nil {
 		return nil
 	}
 	return buf.Bytes()

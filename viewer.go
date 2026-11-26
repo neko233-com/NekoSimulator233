@@ -316,8 +316,8 @@ func (v *emulatorViewer) runCaptureAndInput() {
 				continue
 			}
 			buf = frame
-			pngBytes := encodeRGBAAsFastPNG(frame)
-			if len(pngBytes) == 0 {
+			jpgBytes := encodeRGBAAsFastJPEG(frame)
+			if len(jpgBytes) == 0 {
 				continue
 			}
 			fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy()
@@ -329,7 +329,7 @@ func (v *emulatorViewer) runCaptureAndInput() {
 					return
 				default:
 				}
-				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/png", pngBytes)
+				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/jpeg", jpgBytes)
 				if upErr != nil {
 					if v.frameRes == nil {
 						v.message = "画面上传失败：" + upErr.Error()
