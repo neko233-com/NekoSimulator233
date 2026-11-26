@@ -187,6 +187,7 @@ func openEmulatorViewer(a *app, name string, source display.Session, bindingsPat
 		return nil
 	}
 	v.win = win
+	makeFramelessTitlebarByTitle(v.title)
 	if hasGeom && geom.Left > -4000 && geom.Top > -4000 {
 		setWindowBoundsByTitle(v.title, geom.Left, geom.Top, geom.Width, geom.Height)
 	}
@@ -867,6 +868,25 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 		volIcon = v.app.icons.Mute
 	}
 
+	winCtrlBtn := func(symbol string, isClose bool, fn func()) *scene.Node {
+		hoverBg := uint32(colBgHover)
+		if isClose {
+			hoverBg = colRedBg
+		}
+		return scene.Div(eid(), labelText(symbol, 12, colTextPrimary, false)).
+			Focusable(0).
+			OnClick(v.click(fn)).
+			Style(&scene.Style{
+				Display:        scene.DisplayFlex.Enum(),
+				AlignItems:     scene.AlignCenter.Enum(),
+				JustifyContent: scene.JustifyCenter.Enum(),
+				Width:          scene.Pixels(32),
+				Height:         scene.Pixels(32),
+				CornerRadius:   scene.Ptr[float32](6),
+				Cursor:         scene.CursorPointer.Enum(),
+			}).Hover(&scene.Style{Background: scene.RGB(hoverBg)})
+	}
+
 	rightTools := scene.Div(eid(),
 		toolIcon(v.app.icons.Sync, v.app.syncHub.ActiveFor(v.name), "多开同步", func() {
 			if v.app.syncHub.ActiveFor(v.name) {
@@ -901,12 +921,27 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 			v.drawerOpen = !v.drawerOpen
 			v.render()
 		}),
+		scene.Div(eid()).Style(&scene.Style{
+			Width:      scene.Pixels(1),
+			Height:     scene.Pixels(18),
+			Background: scene.RGB(colBorderLight),
+			Margin:     &scene.Edges{Left: scene.Pixels(4), Right: scene.Pixels(2)},
+		}),
+		winCtrlBtn("─", false, func() { minimizeWindowByTitle(v.title) }),
+		winCtrlBtn("□", false, func() { toggleMaximizeWindowByTitle(v.title) }),
+		winCtrlBtn("✕", true, func() { v.closeWindow() }),
 	).Style(&scene.Style{
 		Display:       scene.DisplayFlex.Enum(),
 		FlexDirection: scene.FlexRow.Enum(),
 		AlignItems:    scene.AlignCenter.Enum(),
-		Gap:           scene.Pixels(4),
+		Gap:           scene.Pixels(2),
 		FlexShrink:    scene.Ptr[float32](0),
+	})
+
+	hDrag := v.interact(func(ev *client.Event) {
+		if md := ev.GetMouseDown(); md != nil && md.Button == client.MouseLeft {
+			dragWindowByTitle(v.title)
+		}
 	})
 
 	return scene.Div(eid(),
@@ -915,9 +950,14 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 			FlexDirection: scene.FlexRow.Enum(),
 			AlignItems:    scene.AlignCenter.Enum(),
 			Gap:           scene.Pixels(4),
-			FlexGrow:      scene.Ptr[float32](1),
 			OverflowX:     scene.OverflowHidden.Enum(),
 		}),
+		scene.Div(eid()).
+			Interact(&scene.Interaction{MouseDown: hDrag}).
+			Style(&scene.Style{
+				FlexGrow: scene.Ptr[float32](1),
+				Height:   scene.Percent(100),
+			}),
 		rightTools,
 	).Style(&scene.Style{
 		Display:        scene.DisplayFlex.Enum(),

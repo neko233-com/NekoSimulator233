@@ -21,18 +21,31 @@ var (
 	procGetWindowRect     = user32DLL.NewProc("GetWindowRect")
 	procShowWindow        = user32DLL.NewProc("ShowWindow")
 	procSetForegroundWnd  = user32DLL.NewProc("SetForegroundWindow")
+	procGetWindowLongPtr  = user32DLL.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr  = user32DLL.NewProc("SetWindowLongPtrW")
+	procReleaseCapture    = user32DLL.NewProc("ReleaseCapture")
+	procSendMessageW      = user32DLL.NewProc("SendMessageW")
+	procIsZoomed          = user32DLL.NewProc("IsZoomed")
 )
 
 const (
 	spiGetWorkArea = 0x0030
 	swHide         = 0
 	swShow         = 5
+	swMinimize     = 6
+	swMaximize     = 3
 	swRestore      = 9
 	swpNoActivate  = 0x0010
 	swpNoSize      = 0x0001
 	swpNoMove      = 0x0002
+	swpNoZOrder    = 0x0004
+	swpFrameChanged = 0x0020
 	hwndTopmost    = ^uintptr(0)     // (HWND)-1
 	hwndNotopmost  = ^uintptr(1)     // (HWND)-2
+	gwlStyle       = ^uintptr(15)    // (int)-16
+	wsCaption      = 0x00C00000
+	wmNCLButtonDown = 0x00A1
+	htCaption      = 2
 )
 
 type winRect struct {
@@ -110,6 +123,50 @@ func showOrHideWindowByTitle(title string, show bool) bool {
 		_, _, _ = procShowWindow.Call(hwnd, swHide)
 	}
 	return true
+}
+
+func makeFramelessTitlebarByTitle(title string) bool {
+	hwnd := findWindowByTitle(title)
+	if hwnd == 0 {
+		return false
+	}
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, gwlStyle)
+	if style == 0 {
+		return false
+	}
+	newStyle := style &^ wsCaption
+	_, _, _ = procSetWindowLongPtr.Call(hwnd, gwlStyle, newStyle)
+	_, _, _ = procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpFrameChanged)
+	return true
+}
+
+func dragWindowByTitle(title string) {
+	hwnd := findWindowByTitle(title)
+	if hwnd == 0 {
+		return
+	}
+	_, _, _ = procReleaseCapture.Call()
+	_, _, _ = procSendMessageW.Call(hwnd, wmNCLButtonDown, htCaption, 0)
+}
+
+func minimizeWindowByTitle(title string) {
+	hwnd := findWindowByTitle(title)
+	if hwnd != 0 {
+		_, _, _ = procShowWindow.Call(hwnd, swMinimize)
+	}
+}
+
+func toggleMaximizeWindowByTitle(title string) {
+	hwnd := findWindowByTitle(title)
+	if hwnd == 0 {
+		return
+	}
+	zoomed, _, _ := procIsZoomed.Call(hwnd)
+	if zoomed != 0 {
+		_, _, _ = procShowWindow.Call(hwnd, swRestore)
+	} else {
+		_, _, _ = procShowWindow.Call(hwnd, swMaximize)
+	}
 }
 
 func setWindowBoundsByTitle(title string, x, y, w, h int) bool {

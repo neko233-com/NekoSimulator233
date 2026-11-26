@@ -15,12 +15,13 @@
      pwsh -NoProfile -File scripts/build-msi.ps1 -Version <新版本>
      pwsh -NoProfile -File install.ps1 -MsiPath .\build\NekoSimulator233-<新版本>-x64.msi -Quiet
      ```
-   - 安装位置：`%LOCALAPPDATA%\NekoSimulator233\`（含 `NekoSimulator233.exe`、`neko-mcp.exe`、`configure-jdk.ps1`、`LICENSE-gpui-go.txt`、`NOTICE-gpui-go.txt`）。
+   - 安装位置：`%LOCALAPPDATA%\NekoSimulator233\`（含 `NekoSimulator233.exe`、`neko-mcp.exe`、`neko-cli.exe`、`configure-jdk.ps1`、`LICENSE-gpui-go.txt`、`NOTICE-gpui-go.txt`）。
    - MSI 默认不打包 Android 运行时（保持安装包轻量）；只有定制离线包才传 `-WithRuntime`。
 
-2. **彻底禁止使用 GitHub Actions**
-   - 后续**严禁**新增、启用、修改或触发任何 `.github/workflows/*.yml`。
-   - 所有编译、单元测试、打包、MSI 制作、本机安装与真机/GUI 验收全部在本机 Windows 环境完成。
+2. **彻底禁止使用 GitHub Actions（无预算 / 零 CI 触发）**
+   - 因无 GitHub Actions 预算，后续**严禁**新增、保留、启用、修改或触发任何 `.github/workflows/*.yml` 或任何 GitHub Actions 工作流。
+   - 推送代码前必须确认仓库内不存在 `.github/workflows/`。
+   - 所有编译、单元测试、打包、MSI 制作、本机安装与全链路实机/GUI 验收全部在本机 Windows 环境完成。
 
 3. **允许完全重构，不需要保留旧版备份**
    - 代码与 UI 架构允许彻底重构升级，不保留冗余备份文件或废弃兼容层（旧 `mygo` UI 已彻底移除）。
@@ -32,7 +33,7 @@
 
 5. **严格双窗口产品形态（对标 MuMu 6.8，100% 去广告）**
    - **入口管理器（图 1）**：独立主窗口（`NekoSimulator233`），采用清爽浅色现代风格（无任何广告、会员横幅、推广红点、商业弹窗）：
-     - 左侧导航栏：`设备` / `远控` / `工具` / `设置`
+     - 左侧导航栏：`设备` / `下载` / `远控` / `工具` / `设置`（底部 `托盘` 后台驻留）
      - 顶部操作栏：`+ 新建设备`（主蓝按钮）、`批量操作`、`排列窗口`、搜索框、排序切换（名称/状态/系统版本）、列表/网格视图切换
      - 设备卡片：左侧缩略图（带 `#0`/`#1`/`#2` 编号角标、实时预览画面或 `未开机`/启动中遮罩）、设备名 + `• 运行中` 绿胶囊、系统徽章（`Android 15`/`Android 14`/`Android 11`）、规格标签（`X 核`、`X GB`）、分辨率与 DPI（`1080 × 1920 | 480 DPI`）、右侧圆形黑底启动/关机按钮 + `⋯` 更多菜单
    - **模拟器窗口（图 2）**：每个运行中的设备拥有独立的 GPUI 窗口（`<设备名> - NekoSimulator233`）：
