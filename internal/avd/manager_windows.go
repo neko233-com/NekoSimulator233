@@ -638,13 +638,12 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	return ready, err
 }
 
-// emulatorProcAttr detaches QEMU from the launching console. Without
-// DETACHED_PROCESS, closing the cmd/PowerShell window sends CTRL_CLOSE_EVENT to
-// the whole process group and silently kills every running emulator.
+// emulatorProcAttr prevents QEMU and its child tools (such as netsimd.exe) from
+// inheriting or allocating a visible console window, while isolating the process group.
 func emulatorProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP,
 	}
 }
 

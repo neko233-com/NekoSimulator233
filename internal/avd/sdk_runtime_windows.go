@@ -127,7 +127,7 @@ func runSDKPackageInstall(ctx context.Context, root, pkg string, notify func(int
 		return err
 	}
 	cmd := exec.CommandContext(ctx, java, "-Dcom.android.sdklib.toolsdir="+tools, "-classpath", classpath, "com.android.sdklib.tool.sdkmanager.SdkManagerCli", "--sdk_root="+root, "--install", pkg, "--channel=0")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Stdin = strings.NewReader("")
 	progress := &sdkProgress{last: -1, notify: notify}
 	cmd.Stdout, cmd.Stderr = progress, progress

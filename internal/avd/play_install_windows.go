@@ -310,7 +310,7 @@ func (m Manager) InstallPlayImage(ctx context.Context, api int, notify func(int)
 	}
 	packageID := fmt.Sprintf("system-images;android-%d;google_apis_playstore;x86_64", api)
 	cmd := exec.CommandContext(ctx, java, "-Dcom.android.sdklib.toolsdir="+tools, "-classpath", classpath, "com.android.sdklib.tool.sdkmanager.SdkManagerCli", "--sdk_root="+root, "--install", packageID, "--channel=0")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Stdin = strings.NewReader("")
 	progress := &sdkProgress{last: -1, notify: notify}
 	cmd.Stdout, cmd.Stderr = progress, progress

@@ -81,6 +81,7 @@ type app struct {
 	backupCancel    context.CancelFunc
 	needsBootstrap  bool
 	pendingLaunch   string
+	bootstrapBusy   bool
 	bootstrapStage  string
 	bootstrapPct    int
 	ecosystem       mcpproxy.EcosystemReport
@@ -400,6 +401,14 @@ func (a *app) startInstance(name string) {
 		a.starting = make(map[string]bool)
 	}
 	if a.starting[key] {
+		a.message = fmt.Sprintf("%s 正在启动中，请勿重复点击…", name)
+		a.render()
+		return
+	}
+	if a.bootstrapBusy {
+		a.pendingLaunch = name
+		a.message = fmt.Sprintf("正在初始化运行环境，完成后将自动启动 %s…", name)
+		a.render()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -412,6 +421,7 @@ func (a *app) startInstance(name string) {
 		manager, err := selectedManager(name)
 		if err != nil && avd.IsMissingSDKError(err) {
 			a.post(func() {
+				a.bootstrapBusy = true
 				a.bootstrapStage = "正在首次自动部署 Android 15 运行环境…"
 				a.bootstrapPct = 1
 				a.message = a.bootstrapStage
@@ -428,6 +438,7 @@ func (a *app) startInstance(name string) {
 				})
 			})
 			a.post(func() {
+				a.bootstrapBusy = false
 				a.bootstrapStage = ""
 				a.bootstrapPct = 0
 			})
@@ -442,7 +453,11 @@ func (a *app) startInstance(name string) {
 			instance, err = manager.StartWithProgress(ctx, func(percent int) {
 				a.post(func() {
 					if a.sdkCancel != nil && ctx.Err() == nil {
-						a.message = fmt.Sprintf("正在准备 %s 运行环境：%d%%", name, percent)
+						if percent >= 100 {
+							a.message = fmt.Sprintf("正在启动 %s（正在开机加载 Android 系统，请稍候…）", name)
+						} else {
+							a.message = fmt.Sprintf("正在准备 %s 运行环境：%d%%", name, percent)
+						}
 						a.render()
 					}
 				})
@@ -488,7 +503,9 @@ func (a *app) startInstance(name string) {
 }
 
 func (a *app) bootstrapAndLaunch() {
-	if a.busy {
+	if a.busy || a.bootstrapBusy {
+		a.message = "运行环境正在部署中，请勿重复点击…"
+		a.render()
 		return
 	}
 	target := a.pendingLaunch
@@ -497,6 +514,7 @@ func (a *app) bootstrapAndLaunch() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.busy = true
+	a.bootstrapBusy = true
 	a.sdkCancel = cancel
 	a.bootstrapStage = "准备部署 Android 运行时…"
 	a.bootstrapPct = 1
@@ -516,6 +534,7 @@ func (a *app) bootstrapAndLaunch() {
 		a.post(func() {
 			defer cancel()
 			a.busy = false
+			a.bootstrapBusy = false
 			a.sdkCancel = nil
 			a.bootstrapStage = ""
 			a.bootstrapPct = 0
@@ -1634,7 +1653,22 @@ func (a *app) buildDeviceCard(item avd.InstanceSummary, index int) *scene.Node {
 		}), bg, colBgHover, fg, 0))
 	}
 	actionsRow = append(actionsRow,
-		circleBtn(actionIcon, colDarkBtn, colDarkBtnHover, colWhite, actionTip, onPrimary),
+		func() *scene.Node {
+			key := independentViewerKey(item.Name)
+			if a.starting[key] {
+				return pillButton("启动中…", a.click(func() {}), colBgSubtle, colBgSubtle, colPrimaryBlue, colPrimaryBlue)
+			}
+			if item.State == "running" && a.viewers[key] == nil {
+				return scene.Div(eid(),
+					pillButton("打开画面", a.click(func() {
+						a.selected = item.Name
+						a.startInstance(item.Name)
+					}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
+					circleBtn(actionIcon, colDarkBtn, colDarkBtnHover, colWhite, actionTip, onPrimary),
+				).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), AlignItems: scene.AlignCenter.Enum(), Gap: scene.Pixels(8)})
+			}
+			return circleBtn(actionIcon, colDarkBtn, colDarkBtnHover, colWhite, actionTip, onPrimary)
+		}(),
 		circleBtn(a.icons.More, colBgSubtle, colBgHover, colTextPrimary, "更多操作", func() {
 			if a.moreMenuDevice == item.Name {
 				a.moreMenuDevice = ""
