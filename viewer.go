@@ -852,10 +852,14 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 	if homeActive {
 		homeBg = colTabActiveBg
 	}
+	homeLabel := v.name
+	if len([]rune(homeLabel)) > 9 {
+		homeLabel = "桌面"
+	}
 	tabs := []*scene.Node{
 		scene.Div(eid(),
 			rasterIcon(v.app.icons.Logo, 18),
-			labelText(v.name, 12, colTextPrimary, homeActive),
+			labelText(homeLabel, 12, colTextPrimary, homeActive),
 		).Focusable(0).OnClick(v.click(func() {
 			v.activeAppPkg = ""
 			v.enqueue(pointerEvent{kind: navigate, action: display.Home})
@@ -1213,6 +1217,11 @@ func (v *emulatorViewer) buildToolsDrawer() *scene.Node {
 				return m.SyncHostTimeAndLocale(ctx, inst)
 			})
 		}), colBgSubtle, colBgHover, colTextPrimary, 0),
+		pillButton("一键精简系统 / 刷新Neko桌面", v.click(func() {
+			v.runADBTask("定制精简 Android 系统与 Neko 桌面", func(ctx context.Context, m avd.Manager, inst avd.Instance) error {
+				return m.CustomizeSlimAndroidSystem(ctx, inst, true)
+			})
+		}), colPrimaryBlue, colPrimaryHover, colWhite, 0),
 	).Style(&scene.Style{Display: scene.DisplayFlex.Enum(), FlexDirection: scene.FlexRow.Enum(), FlexWrap: scene.Ptr(true), Gap: scene.Pixels(6)})
 }
 

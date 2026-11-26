@@ -565,6 +565,12 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	if instance, err := m.discover(); err == nil {
 		ready, err := m.waitReady(ctx, instance.Serial)
 		if err == nil {
+			go func(inst Instance) {
+				slimCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				defer cancel()
+				_ = m.SyncHostTimeAndLocale(slimCtx, inst)
+				_ = m.CustomizeSlimAndroidSystem(slimCtx, inst, false)
+			}(ready)
 			m.scheduleTapTap(ready)
 		}
 		return ready, err
@@ -635,9 +641,10 @@ func (m Manager) StartWithProgress(ctx context.Context, notify func(int)) (Insta
 	}
 	if err == nil {
 		go func(inst Instance) {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			syncCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
 			_ = m.SyncHostTimeAndLocale(syncCtx, inst)
+			_ = m.CustomizeSlimAndroidSystem(syncCtx, inst, false)
 		}(ready)
 		m.scheduleTapTap(ready)
 	}

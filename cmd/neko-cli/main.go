@@ -275,6 +275,16 @@ func run(args []string) error {
 		}
 		return m.SyncHostTimeAndLocale(ctx, inst)
 
+	case "customize-slim":
+		if len(rest) < 1 {
+			return fmt.Errorf("usage: neko-cli customize-slim <name>")
+		}
+		m, inst, err := runningManagerFor(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		return m.CustomizeSlimAndroidSystem(ctx, inst, true)
+
 	default:
 		return fmt.Errorf("unknown command %q (run neko-cli --help)", cmd)
 	}
