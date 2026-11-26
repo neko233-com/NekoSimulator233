@@ -186,6 +186,30 @@ func run(args []string) error {
 		}
 		return m.InstallAPK(ctx, inst, rest[1], false)
 
+	case "uninstall":
+		if len(rest) < 2 {
+			return fmt.Errorf("usage: neko-cli uninstall <name> <package>")
+		}
+		m, inst, err := runningManagerFor(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		return m.UninstallApp(ctx, inst, rest[1])
+
+	case "install-taptap":
+		if len(rest) < 1 {
+			return fmt.Errorf("usage: neko-cli install-taptap <name>")
+		}
+		m, inst, err := runningManagerFor(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		res, err := m.InstallTapTap(ctx, inst)
+		if err != nil {
+			return err
+		}
+		return printJSON(res)
+
 	case "tap":
 		if len(rest) < 3 {
 			return fmt.Errorf("usage: neko-cli tap <name> <x> <y>")

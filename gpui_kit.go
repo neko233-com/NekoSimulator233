@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"image"
+	"image/png"
 	"sync/atomic"
 
 	"github.com/moriyoshi/gpui-go/client"
@@ -95,6 +97,22 @@ func encodeRGBAAsBMP(img *image.RGBA) []byte {
 		}
 	}
 	return buf
+}
+
+var fastPNGEncoder = &png.Encoder{CompressionLevel: png.NoCompression}
+
+// encodeRGBAAsFastPNG encodes an *image.RGBA as an uncompressed PNG for GPUI
+// ResourceImage, which supports PNG/JPEG/GIF/WebP (not BMP).
+func encodeRGBAAsFastPNG(img *image.RGBA) []byte {
+	if img == nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	buf.Grow(img.Bounds().Dx()*img.Bounds().Dy()*4 + 1024)
+	if err := fastPNGEncoder.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // iconBank stores uploaded crisp SVG handles for the GPUI UI.

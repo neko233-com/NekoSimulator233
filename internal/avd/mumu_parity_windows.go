@@ -669,7 +669,7 @@ func ParseRunningApps(windowDump, recentsDump string) []RunningApp {
 	seen := map[string]bool{}
 	var apps []RunningApp
 	add := func(pkg string, isFg bool) {
-		if pkg == "" || isLauncherOrSystemPkg(pkg) || seen[pkg] {
+		if pkg == "" || isLauncherOrSystemPkg(pkg) || strings.Contains(strings.ToLower(pkg), "fallbackhome") || seen[pkg] {
 			return
 		}
 		seen[pkg] = true

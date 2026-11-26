@@ -307,11 +307,17 @@ func (v *emulatorViewer) runCaptureAndInput() {
 		case <-ticker.C:
 			frame, err := v.source.Capture(buf)
 			if err != nil {
+				if v.frameRes == nil {
+					v.app.post(func() {
+						v.message = "等待画面帧：" + err.Error()
+						v.render()
+					})
+				}
 				continue
 			}
 			buf = frame
-			bmp := encodeRGBAAsBMP(frame)
-			if len(bmp) == 0 {
+			pngBytes := encodeRGBAAsFastPNG(frame)
+			if len(pngBytes) == 0 {
 				continue
 			}
 			fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy()
@@ -323,22 +329,27 @@ func (v *emulatorViewer) runCaptureAndInput() {
 					return
 				default:
 				}
-				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/bmp", bmp)
-				if upErr == nil {
-					old := v.frameRes
-					v.frameRes = res
-					v.width, v.height = fw, fh
-					v.message = ""
-					v.fpsFrames++
-					if elapsed := time.Since(v.fpsStart); elapsed >= time.Second {
-						v.liveFPS = float64(v.fpsFrames) / elapsed.Seconds()
-						v.fpsFrames = 0
-						v.fpsStart = time.Now()
+				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/png", pngBytes)
+				if upErr != nil {
+					if v.frameRes == nil {
+						v.message = "画面上传失败：" + upErr.Error()
+						v.render()
 					}
-					v.render()
-					if old != nil {
-						_ = old.Release(v.app.ctx)
-					}
+					return
+				}
+				old := v.frameRes
+				v.frameRes = res
+				v.width, v.height = fw, fh
+				v.message = ""
+				v.fpsFrames++
+				if elapsed := time.Since(v.fpsStart); elapsed >= time.Second {
+					v.liveFPS = float64(v.fpsFrames) / elapsed.Seconds()
+					v.fpsFrames = 0
+					v.fpsStart = time.Now()
+				}
+				v.render()
+				if old != nil {
+					_ = old.Release(v.app.ctx)
 				}
 			})
 			select {
