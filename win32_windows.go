@@ -3,7 +3,9 @@
 package main
 
 import (
+	"math"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -13,12 +15,15 @@ import (
 
 var (
 	user32DLL             = windows.NewLazySystemDLL("user32.dll")
+	comctl32DLL           = windows.NewLazySystemDLL("comctl32.dll")
 	procSystemParameters  = user32DLL.NewProc("SystemParametersInfoW")
 	procEnumWindows       = user32DLL.NewProc("EnumWindows")
 	procGetWindowTextW    = user32DLL.NewProc("GetWindowTextW")
 	procIsWindowVisible   = user32DLL.NewProc("IsWindowVisible")
 	procSetWindowPos      = user32DLL.NewProc("SetWindowPos")
 	procGetWindowRect     = user32DLL.NewProc("GetWindowRect")
+	procGetClientRect     = user32DLL.NewProc("GetClientRect")
+	procGetDpiForWindow   = user32DLL.NewProc("GetDpiForWindow")
 	procShowWindow        = user32DLL.NewProc("ShowWindow")
 	procSetForegroundWnd  = user32DLL.NewProc("SetForegroundWindow")
 	procGetWindowLongPtr  = user32DLL.NewProc("GetWindowLongPtrW")
@@ -26,6 +31,9 @@ var (
 	procReleaseCapture    = user32DLL.NewProc("ReleaseCapture")
 	procSendMessageW      = user32DLL.NewProc("SendMessageW")
 	procIsZoomed          = user32DLL.NewProc("IsZoomed")
+	procSetWindowSubclass = comctl32DLL.NewProc("SetWindowSubclass")
+	procDefSubclassProc   = comctl32DLL.NewProc("DefSubclassProc")
+	procRemoveWinSubclass = comctl32DLL.NewProc("RemoveWindowSubclass")
 )
 
 const (
@@ -45,8 +53,132 @@ const (
 	gwlStyle       = ^uintptr(15)    // (int)-16
 	wsCaption      = 0x00C00000
 	wmNCLButtonDown = 0x00A1
-	htCaption      = 2
+	wmSizing        = 0x0214
+	wmNCDestroy     = 0x0082
+	htCaption       = 2
+	aspectSubID     = 2331
 )
+
+type aspectLockConfig struct {
+	frameW, frameH int
+	chromeH        int
+}
+
+var (
+	aspectMu    sync.RWMutex
+	aspectLocks = make(map[uintptr]*aspectLockConfig)
+	aspectOnce  sync.Once
+	aspectCB    uintptr
+)
+
+func getAspectCB() uintptr {
+	aspectOnce.Do(func() {
+		aspectCB = syscall.NewCallback(aspectSubclassProc)
+	})
+	return aspectCB
+}
+
+func windowDPI(hwnd uintptr) float64 {
+	if procGetDpiForWindow.Find() == nil {
+		if dpi, _, _ := procGetDpiForWindow.Call(hwnd); dpi >= 96 {
+			return float64(dpi) / 96.0
+		}
+	}
+	return 1.0
+}
+
+func windowOverhead(hwnd uintptr, chromeLogicalH int) (extraW, extraH int32) {
+	var wr, cr winRect
+	_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
+	_, _, _ = procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&cr)))
+	extraW = (wr.Right - wr.Left) - (cr.Right - cr.Left)
+	extraH = (wr.Bottom - wr.Top) - (cr.Bottom - cr.Top) + int32(math.Round(float64(chromeLogicalH)*windowDPI(hwnd)))
+	return extraW, extraH
+}
+
+func aspectSubclassProc(hwnd uintptr, msg uint32, wParam, lParam uintptr, uIdSubclass, dwRefData uintptr) uintptr {
+	switch msg {
+	case wmSizing:
+		aspectMu.RLock()
+		cfg := aspectLocks[hwnd]
+		var fw, fh, ch int
+		if cfg != nil {
+			fw, fh, ch = cfg.frameW, cfg.frameH, cfg.chromeH
+		}
+		aspectMu.RUnlock()
+		if fw > 0 && fh > 0 && lParam != 0 {
+			rc := (*winRect)(*(*unsafe.Pointer)(unsafe.Pointer(&lParam)))
+			extraW, extraH := windowOverhead(hwnd, ch)
+			minW := int32(math.Round(240 * windowDPI(hwnd)))
+			clientW := (rc.Right - rc.Left) - extraW
+			clientH := (rc.Bottom - rc.Top) - extraH
+			if clientW < minW {
+				clientW = minW
+			}
+			if clientH < minW {
+				clientH = minW
+			}
+			// WMSZ_TOP=3, WMSZ_BOTTOM=6 adjust width; edges/corners adjust height.
+			if wParam == 3 || wParam == 6 {
+				targetW := int32(math.Round(float64(clientH)*float64(fw)/float64(fh))) + extraW
+				rc.Right = rc.Left + targetW
+			} else {
+				rc.Right = rc.Left + clientW + extraW
+				targetH := int32(math.Round(float64(clientW)*float64(fh)/float64(fw))) + extraH
+				if wParam == 4 || wParam == 5 {
+					rc.Top = rc.Bottom - targetH
+				} else {
+					rc.Bottom = rc.Top + targetH
+				}
+			}
+			return 1
+		}
+	case wmNCDestroy:
+		aspectMu.Lock()
+		delete(aspectLocks, hwnd)
+		aspectMu.Unlock()
+		_, _, _ = procRemoveWinSubclass.Call(hwnd, aspectCB, uIdSubclass)
+	}
+	ret, _, _ := procDefSubclassProc.Call(hwnd, uintptr(msg), wParam, lParam)
+	return ret
+}
+
+func setWindowAspectByTitle(title string, frameW, frameH, chromeLogicalH int, snap bool) {
+	if frameW <= 0 || frameH <= 0 {
+		return
+	}
+	hwnd := findWindowByTitle(title)
+	if hwnd == 0 {
+		return
+	}
+	aspectMu.Lock()
+	cfg, exists := aspectLocks[hwnd]
+	if !exists {
+		cfg = &aspectLockConfig{}
+		aspectLocks[hwnd] = cfg
+		_, _, _ = procSetWindowSubclass.Call(hwnd, getAspectCB(), aspectSubID, 0)
+	}
+	cfg.frameW, cfg.frameH, cfg.chromeH = frameW, frameH, chromeLogicalH
+	aspectMu.Unlock()
+
+	if snap {
+		zoomed, _, _ := procIsZoomed.Call(hwnd)
+		if zoomed != 0 {
+			return
+		}
+		var wr winRect
+		_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
+		extraW, extraH := windowOverhead(hwnd, chromeLogicalH)
+		curW := wr.Right - wr.Left
+		clientW := curW - extraW
+		if clientW > 100 {
+			targetH := int32(math.Round(float64(clientW)*float64(frameH)/float64(frameW))) + extraH
+			if targetH != (wr.Bottom - wr.Top) {
+				_, _, _ = procSetWindowPos.Call(hwnd, 0, 0, 0, uintptr(curW), uintptr(targetH), swpNoMove|swpNoZOrder|swpNoActivate)
+			}
+		}
+	}
+}
 
 type winRect struct {
 	Left, Top, Right, Bottom int32

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 
 const (
 	topBarHeight      float32 = 42
+	bottomBarHeight   float32 = 34
 	drawerBarHeight   float32 = 176
 	idViewerViewport  uint64  = 500
 	idMacroNameInput  uint64  = 501
@@ -295,6 +297,9 @@ func (v *emulatorViewer) runCaptureAndInput() {
 	defer ticker.Stop()
 
 	var buf *image.RGBA
+	var jpegBuf bytes.Buffer
+	jpegBuf.Grow(256 * 1024)
+	var lastSig uint64
 	for {
 		select {
 		case <-v.done:
@@ -317,11 +322,18 @@ func (v *emulatorViewer) runCaptureAndInput() {
 				continue
 			}
 			buf = frame
-			jpgBytes := encodeRGBAAsFastJPEG(frame)
+			fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy()
+			sig := frameSignature(frame)
+			if sig == lastSig && fw == v.width && fh == v.height && v.frameRes != nil {
+				continue
+			}
+			lastSig = sig
+			jpgBytes := encodeRGBAAsFastJPEGInto(&jpegBuf, frame)
 			if len(jpgBytes) == 0 {
 				continue
 			}
-			fw, fh := frame.Bounds().Dx(), frame.Bounds().Dy()
+			payload := make([]byte, len(jpgBytes))
+			copy(payload, jpgBytes)
 			ack := make(chan struct{})
 			v.app.post(func() {
 				defer close(ack)
@@ -330,7 +342,7 @@ func (v *emulatorViewer) runCaptureAndInput() {
 					return
 				default:
 				}
-				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/jpeg", jpgBytes)
+				res, upErr := v.app.cli.UploadResource(v.app.ctx, client.ResourceImage, "image/jpeg", payload)
 				if upErr != nil {
 					if v.frameRes == nil {
 						v.message = "画面上传失败：" + upErr.Error()
@@ -339,9 +351,13 @@ func (v *emulatorViewer) runCaptureAndInput() {
 					return
 				}
 				old := v.frameRes
+				firstOrRotated := v.width == 0 || (fw > fh) != (v.width > v.height)
 				v.frameRes = res
 				v.width, v.height = fw, fh
 				v.message = ""
+				if firstOrRotated {
+					setWindowAspectByTitle(v.title, fw, fh, v.chromeHeight(), true)
+				}
 				v.fpsFrames++
 				if elapsed := time.Since(v.fpsStart); elapsed >= time.Second {
 					v.liveFPS = float64(v.fpsFrames) / elapsed.Seconds()
@@ -381,14 +397,18 @@ func (v *emulatorViewer) pollRunningApps() {
 				continue
 			}
 			v.app.post(func() {
-				v.runningApps = apps
-				v.activeAppPkg = ""
+				newFg := ""
 				for _, a := range apps {
 					if a.Foreground {
-						v.activeAppPkg = a.Package
+						newFg = a.Package
 						break
 					}
 				}
+				if runningAppsEqual(v.runningApps, apps) && newFg == v.activeAppPkg {
+					return
+				}
+				v.runningApps = apps
+				v.activeAppPkg = newFg
 				v.render()
 			})
 		}
@@ -414,7 +434,7 @@ func (v *emulatorViewer) releaseHostInput() {
 }
 
 func (v *emulatorViewer) viewportSize() (float32, float32) {
-	vh := v.viewH - topBarHeight
+	vh := v.viewH - topBarHeight - bottomBarHeight
 	if v.drawerOpen {
 		vh -= drawerBarHeight
 	}
@@ -536,6 +556,17 @@ func (v *emulatorViewer) handleViewportEvent(ev *client.Event) {
 		ke := ev.GetKeyDown()
 		if ke == nil {
 			return
+		}
+		if strings.EqualFold(ke.Key, "f11") {
+			_ = v.win.ToggleFullscreen(v.app.ctx)
+			return
+		}
+		if strings.EqualFold(ke.Key, "escape") && v.editing == 0 {
+			if _, bound := v.bindings[0x29]; !bound {
+				v.enqueue(pointerEvent{kind: navigate, action: display.Back})
+				v.app.syncHub.BroadcastNavigate(v.name, display.Back)
+				return
+			}
 		}
 		usage := gpuiKeyToHID(ke.Key)
 		if usage == 0 {
@@ -919,6 +950,7 @@ func (v *emulatorViewer) buildTopChromeBar() *scene.Node {
 		}),
 		toolIcon(v.app.icons.More, v.drawerOpen, "更多工具", func() {
 			v.drawerOpen = !v.drawerOpen
+			setWindowAspectByTitle(v.title, v.width, v.height, v.chromeHeight(), true)
 			v.render()
 		}),
 		scene.Div(eid()).Style(&scene.Style{
@@ -1475,6 +1507,26 @@ func (v *emulatorViewer) buildViewport() *scene.Node {
 			OverflowX:      scene.OverflowHidden.Enum(),
 			OverflowY:      scene.OverflowHidden.Enum(),
 		})
+}
+
+func (v *emulatorViewer) chromeHeight() int {
+	h := int(topBarHeight + bottomBarHeight)
+	if v.drawerOpen {
+		h += int(drawerBarHeight)
+	}
+	return h
+}
+
+func runningAppsEqual(a, b []avd.RunningApp) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *emulatorViewer) buildBottomNavBar() *scene.Node {

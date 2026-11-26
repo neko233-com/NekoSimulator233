@@ -99,15 +99,46 @@ func encodeRGBAAsBMP(img *image.RGBA) []byte {
 	return buf
 }
 
-// encodeRGBAAsFastJPEG encodes an *image.RGBA as a high-quality JPEG (typically
-// 150-400 KB at 1080x1920), keeping well below GPUI's IPC message size limit.
-func encodeRGBAAsFastJPEG(img *image.RGBA) []byte {
+// frameSignature computes a fast FNV-1a hash over sampled pixels so static
+// emulator frames can skip JPEG encoding and IPC upload completely.
+func frameSignature(img *image.RGBA) uint64 {
 	if img == nil {
+		return 0
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	const offset64 = 14695981039346656037
+	const prime64 = 1099511628211
+	hash := uint64(offset64)
+	hash ^= uint64(w)<<32 | uint64(h)
+	hash *= prime64
+	stepY := max(1, h/48)
+	stepX := max(1, w/48)
+	for y := 0; y < h; y += stepY {
+		rowOff := (y + b.Min.Y - img.Rect.Min.Y) * img.Stride
+		for x := 0; x < w; x += stepX {
+			i := rowOff + (x+b.Min.X-img.Rect.Min.X)*4
+			if i+3 < len(img.Pix) {
+				v := uint64(img.Pix[i]) | uint64(img.Pix[i+1])<<8 | uint64(img.Pix[i+2])<<16 | uint64(img.Pix[i+3])<<24
+				hash ^= v
+				hash *= prime64
+			}
+		}
+	}
+	return hash
+}
+
+// encodeRGBAAsFastJPEGInto encodes an *image.RGBA into a reusable buffer as a
+// fast Quality-80 JPEG, keeping payload small (~100-250 KB) and allocations zero.
+func encodeRGBAAsFastJPEGInto(buf *bytes.Buffer, img *image.RGBA) []byte {
+	if img == nil || buf == nil {
 		return nil
 	}
-	var buf bytes.Buffer
-	buf.Grow(256 * 1024)
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 88}); err != nil {
+	buf.Reset()
+	if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 80}); err != nil {
 		return nil
 	}
 	return buf.Bytes()
